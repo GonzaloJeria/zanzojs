@@ -1,0 +1,56 @@
+{
+  "name": "@zanzojs/drizzle",
+  "version": "0.1.0-beta.2",
+  "description": "Drizzle ORM adapter for Zanzo ReBAC. Zero-config Zanzibar Tuple Pattern with parameterized SQL.",
+  "keywords": [
+    "@zanzojs/core",
+    "drizzle",
+    "drizzle-orm",
+    "rebac",
+    "authorization",
+    "zanzibar"
+  ],
+  "homepage": "https://github.com/GonzaloJeria/zanzo",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/GonzaloJeria/zanzo.git",
+    "directory": "packages/drizzle"
+  },
+  "license": "MIT",
+  "author": "Gonzalo Jeria",
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "test:types": "vitest run --typecheck"
+  },
+  "peerDependencies": {
+    "@zanzojs/core": "^0.1.0-beta.0",
+    "drizzle-orm": ">=0.29.0"
+  },
+  "devDependencies": {
+    "@zanzojs/core": "workspace:*",
+    "drizzle-orm": "catalog:",
+    "typescript": "catalog:",
+    "tsup": "latest",
+    "vitest": "latest"
+  }
+}

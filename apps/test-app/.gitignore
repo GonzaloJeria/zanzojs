@@ -1,0 +1,17 @@
+# dependencies
+node_modules/
+
+# next
+.next/
+out/
+
+# database
+data/
+
+# drizzle migrations
+drizzle/
+
+# misc
+.DS_Store
+*.tsbuildinfo
+next-env.d.ts

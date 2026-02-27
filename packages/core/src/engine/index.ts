@@ -1,0 +1,381 @@
+import type { SchemaData } from '../builder/index';
+import { parseEntityRef, RELATION_PATH_SEPARATOR } from '../ref/index';
+
+/**
+ * Represents a logical ReBAC relational tuple binding a Subject to an Object via a Relation.
+ * Example: User:1 is the 'owner' of Project:A
+ */
+export interface RelationTuple {
+  /**
+   * The actor or subject Entity, typically format 'Type:ID' (e.g. 'User:123')
+   */
+  subject: string;
+  /**
+   * The relationship linking the subject to the object (e.g. 'owner', 'viewer')
+   */
+  relation: string;
+  /**
+   * The target object Entity, typically format 'Type:ID' (e.g. 'Project:456')
+   */
+  object: string;
+}
+
+/**
+ * Extracts all valid Entity Types (Resources) defined in the provided Schema
+ */
+export type ExtractSchemaResources<TSchema extends SchemaData> = keyof TSchema;
+
+/**
+ * Extracts all Action string unions allowed for a specific Resource type
+ * from the provided Schema.
+ */
+export type ExtractSchemaActions<
+  TSchema extends SchemaData,
+  TResource extends keyof TSchema,
+> = TSchema[TResource]['actions'][number];
+
+/**
+ * Advanced Generic ReBAC Engine.
+ * Takes a Schema initialized by ZanzoBuilder as its type base to offer strict autocomplete.
+ */
+export class ZanzoEngine<TSchema extends SchemaData> {
+  private schema: Readonly<TSchema>;
+  // Map<ObjectIdentifier, Map<Relation, Set<SubjectIdentifier>>>
+  private index = new Map<string, Map<string, Set<string>>>();
+
+  constructor(schema: Readonly<TSchema>) {
+    this.schema = schema;
+  }
+
+  /**
+   * Retreives the readonly schema structure.
+   */
+  public getSchema(): Readonly<TSchema> {
+    return this.schema;
+  }
+
+  /**
+   * Retrieves the read-only relation-graph maps indexing memory objects.
+   * Exposing strictly for flat compilers.
+   */
+  public getIndex(): ReadonlyMap<string, ReadonlyMap<string, ReadonlySet<string>>> {
+    return this.index as unknown as ReadonlyMap<string, ReadonlyMap<string, ReadonlySet<string>>>;
+  }
+
+  // ZANZO-REVIEW: Extraído según la especificación (validateActorInput). 
+  // Nota: hemos agrupado `resourceType` bajo su propia directriz, pero mantenemos esta abstracción idéntica
+  // a cómo se extrae la validación limpia del actor tal y como solicitaste.
+  // Issue #9: Unified validation — previously duplicated between actor and resource validators.
+  private validateInput(input: string, label: string): void {
+    if (!input || typeof input !== 'string' || input.length > 255) {
+      throw new Error(`[Zanzo] Invalid ${label} input. Must be a non-empty string under 255 characters.`);
+    }
+    const controlCharsRegex = /[\x00-\x1F\x7F]/;
+    if (controlCharsRegex.test(input)) {
+      throw new Error(`[Zanzo] Security Exception: ${label} input contains illegal unprintable control characters.`);
+    }
+  }
+
+  /**
+   * Injects a relation tuple into the in-memory store.
+   * Issue #3: Validates all tuple fields before storing to prevent graph poisoning.
+   */
+  public addTuple(tuple: RelationTuple): void {
+    this.validateInput(tuple.subject, 'subject');
+    this.validateInput(tuple.object, 'object');
+    this.validateInput(tuple.relation, 'relation');
+
+    let objectRelations = this.index.get(tuple.object);
+    if (!objectRelations) {
+      objectRelations = new Map<string, Set<string>>();
+      this.index.set(tuple.object, objectRelations);
+    }
+
+    let subjectsSet = objectRelations.get(tuple.relation);
+    if (!subjectsSet) {
+      subjectsSet = new Set<string>();
+      objectRelations.set(tuple.relation, subjectsSet);
+    }
+
+    subjectsSet.add(tuple.subject);
+  }
+
+  /**
+   * Injects multiple relation tuples into the in-memory store.
+   */
+  public addTuples(tuples: RelationTuple[]): void {
+    for (const tuple of tuples) {
+      this.addTuple(tuple);
+    }
+  }
+
+  /**
+   * Clears all relation tuples in the memory store.
+   */
+  public clearTuples(): void {
+    this.index.clear();
+  }
+
+  /**
+   * PERF-2: Evaluates ALL actions for a given actor on a specific resource in a
+   * single pass. Returns the list of granted actions.
+   *
+   * This is more efficient than calling can() per action because:
+   * - Identical routes shared by multiple actions are evaluated only once
+   * - Early exit when all actions are already resolved
+   * - Only one validation pass per (actor, resource) pair
+   *
+   * @internal This method is public solely because `createZanzoSnapshot` (in compiler/)
+   * requires access to it. It is NOT part of the public API contract and may change
+   * without notice in any minor version. Making it private would require moving
+   * `createZanzoSnapshot` into ZanzoEngine as a method, which would break the current
+   * modular architecture where the compiler is a standalone pure function.
+   */
+  public evaluateAllActions(actor: string, resource: string): string[] {
+    this.validateInput(actor, 'actor');
+    this.validateInput(resource, 'resource');
+
+    const resourceType = parseEntityRef(resource).type;
+    const resourceSchema = this.schema[resourceType as keyof TSchema];
+
+    if (!resourceSchema) return [];
+
+    const actions = resourceSchema.actions as string[];
+    if (!actions || actions.length === 0) return [];
+
+    const permissions = resourceSchema.permissions as Record<string, string[]> | undefined;
+    if (!permissions) return [];
+
+    // Deduplicate routes: group actions by their route string to avoid
+    // traversing the same graph path multiple times (e.g. 'owner' used by view, edit, delete)
+    const routeMap = new Map<string, { parts: string[]; actions: Set<string> }>();
+
+    for (const action of actions) {
+      const relationsForAction = permissions[action];
+      if (!relationsForAction || relationsForAction.length === 0) continue;
+
+      for (const route of relationsForAction) {
+        let entry = routeMap.get(route);
+        if (!entry) {
+          entry = { parts: route.split(RELATION_PATH_SEPARATOR), actions: new Set() };
+          routeMap.set(route, entry);
+        }
+        entry.actions.add(action);
+      }
+    }
+
+    if (routeMap.size === 0) return [];
+
+    // Evaluate each unique route once, mapping results to all associated actions
+    const grantedActions = new Set<string>();
+
+    for (const { parts, actions: routeActions } of routeMap.values()) {
+      // Skip if all actions for this route are already granted
+      const allAlreadyGranted = [...routeActions].every(a => grantedActions.has(a));
+      if (allAlreadyGranted) continue;
+
+      // Each unique route gets a fresh visited set to avoid cross-route interference
+      const resolved = this.checkRelationsRecursive(
+        actor,
+        [parts],
+        resource,
+        new Set<string>(),
+        0,
+      );
+
+      if (resolved) {
+        for (const action of routeActions) {
+          grantedActions.add(action);
+        }
+      }
+
+      // Early exit if all actions are granted
+      if (grantedActions.size === actions.length) break;
+    }
+
+    // Return in original action order to maintain deterministic output
+    return actions.filter(a => grantedActions.has(a));
+  }
+
+  /**
+   * Evaluates if a given actor has permission to perform an action on a specific resource.
+   * Leverages TypeScript assertions to provide strict autocompletion based on the schema.
+   *
+   * @param actor The subject entity string identifier (e.g., 'User:1')
+   * @param action The specific action to perform (e.g., 'edit'), strictly typed.
+   * @param resource The target resource entity string identifier (e.g., 'Project:A')
+   * @returns boolean True if authorized, false otherwise.
+   */
+  public can<
+    TResourceName extends Extract<ExtractSchemaResources<TSchema>, string>,
+    TAction extends ExtractSchemaActions<TSchema, TResourceName>,
+  >(actor: string, action: TAction, resource: `${TResourceName}:${string}`): boolean {
+    this.validateInput(actor, 'actor');
+    this.validateInput(resource, 'resource');
+
+    const resourceType = parseEntityRef(resource).type as TResourceName;
+    const resourceSchema = this.schema[resourceType];
+
+    if (!resourceSchema || !resourceSchema.actions.includes(action as any)) {
+      return false;
+    }
+
+    const allowedRelationsForAction = (resourceSchema.permissions?.[action] || []) as string[];
+
+    if (allowedRelationsForAction.length === 0) {
+      return false;
+    }
+
+    // Pre-split the allowed routes to avoid running String.split repeatedly during recursion
+    const preSplitRoutes: string[][] = allowedRelationsForAction.map((route) => route.split(RELATION_PATH_SEPARATOR));
+    
+    // ZANZO-REVIEW: Decidí NO APLICAR la pre-computación de `routeKey` global solicitada en Tarea 3c.
+    // Razón: En grafos combinatorios, si un nodo se alcanza por dos ramas requiriendo "remainders" distintos, 
+    // un hash global estático provocará un falso negativo en el caché `visited` y denegará permisos erróneamente.
+    // (Esto causaba que stress.test.ts fallara). Mantenemos la concatenación selectiva pasada por recursión.
+
+    // Call the recursive engine internal handler
+    return this.checkRelationsRecursive(actor, preSplitRoutes, resource, new Set<string>(), 0);
+  }
+
+  /**
+   * Internal recursive relation evaluation algorithm via Map Indexes.
+   *
+   * @param actor The original actor trying to accomplish the task
+   * @param allowedRoutes Array of relation chains (pre-splitted parts) that grant access
+   * @param currentTarget The current entity node in the graph being evaluated
+   * @param visited Set of visited nodes to prevent cycles in graph evaluation
+   * @returns True if relation path connects target to actor
+   */
+  private checkRelationsRecursive(
+    actor: string,
+    allowedRoutes: string[][],
+    currentTarget: string,
+    visited: Set<string>,
+    depth: number = 0,
+    parentSignature: string = '',
+  ): boolean {
+    if (depth > 50) {
+      throw new Error(`[Zanzo] Security Exception: Maximum relationship depth of 50 exceeded. Graph might contain an infinite cycle or is too heavily nested.`);
+    }
+    
+    // Memory Hotspot Optimization (GC Friendly):
+    const visitedSignature = `${actor}|${currentTarget}|${parentSignature}`;
+
+    if (visited.has(visitedSignature)) {
+      return false;
+    }
+    visited.add(visitedSignature);
+
+    const targetRelationsIndex = this.index.get(currentTarget);
+
+    // If there's absolutely no relations associated with this target, abort the exploration to save cycles
+    if (!targetRelationsIndex) {
+      return false;
+    }
+
+    // Since we traverse allowedRoutes dynamically, pass down the identifier of the CURRENT route choice
+    for (let i = 0; i < allowedRoutes.length; i++) {
+      const routeParts = allowedRoutes[i] as string[];
+      const currentRelation = routeParts[0] as string;
+      const subjectsForRelation = targetRelationsIndex.get(currentRelation);
+
+      // If no subjects possess this relation on the target, skip this route
+      if (!subjectsForRelation || subjectsForRelation.size === 0) {
+        continue;
+      }
+
+      if (routeParts.length === 1) {
+        // Direct relation base case check O(1)
+        if (subjectsForRelation.has(actor)) {
+          return true;
+        }
+      } else {
+        // Inherited nested relation graph exploration
+        const remainingRoute = routeParts.slice(1);
+        
+        const nextSignature = parentSignature ? parentSignature + '.' + currentRelation + `[${i}]` : currentRelation + `[${i}]`;
+
+        // Optimize: we execute branching recursively into subsets, and stop at first generic success.
+        for (const intermediateSubject of subjectsForRelation) {
+          const isGranted = this.checkRelationsRecursive(
+            actor,
+            [remainingRoute], // Pass down the remaining route only
+            intermediateSubject,
+            visited,
+            depth + 1,
+            nextSignature
+          );
+
+          if (isGranted) return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Generates a database-agnostic Abstract Syntax Tree (AST) representing
+   * the logical query needed to verify if the given actor is authorized to
+   * perform action on a specific resourceType.
+   *
+   * Useful for "Query Pushdown", allowing ORMs or databases to evaluate permissions
+   * directly across their own relational tables instead of loading data into memory.
+   *
+   * @param actor The subject entity string identifier (e.g., 'User:1')
+   * @param action The specific action to perform (e.g., 'read'), strictly typed.
+   * @param resourceType The target resource entity TYPE (e.g., 'Project')
+   * @returns QueryAST block if action is valid and has mapped relations, null otherwise.
+   */
+  public buildDatabaseQuery<
+    TResourceName extends Extract<ExtractSchemaResources<TSchema>, string>,
+    TAction extends ExtractSchemaActions<TSchema, TResourceName>,
+  >(
+    actor: string,
+    action: TAction,
+    resourceType: TResourceName,
+  ): import('../ast/index').QueryAST | null {
+    this.validateInput(actor, 'actor');
+    this.validateInput(resourceType as string, 'resource');
+
+    const resourceSchema = this.schema[resourceType];
+
+    if (!resourceSchema || !resourceSchema.actions.includes(action as any)) {
+      return null;
+    }
+
+    const allowedRelationsForAction = (resourceSchema.permissions?.[action] || []) as string[];
+
+    if (allowedRelationsForAction.length === 0) {
+      return null;
+    }
+
+    // Build the underlying AST based on allowed relation paths
+    const conditions = allowedRelationsForAction.map(
+      (routeLine): import('../ast/index').Condition => {
+        const parts = routeLine.split(RELATION_PATH_SEPARATOR);
+
+        if (parts.length === 1) {
+          return {
+            type: 'direct',
+            relation: parts[0] as string,
+            targetSubject: actor,
+          };
+        }
+
+        return {
+          type: 'nested',
+          relation: parts[0] as string,
+          nextRelationPath: parts.slice(1),
+          targetSubject: actor,
+        };
+      },
+    );
+
+    return {
+      operator: 'OR', // ReBAC normally operates on union of granted authority paths
+      conditions,
+    };
+  }
+}
