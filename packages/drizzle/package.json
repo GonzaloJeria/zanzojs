@@ -1,6 +1,6 @@
 {
   "name": "@zanzojs/drizzle",
-  "version": "0.1.0-beta.2",
+  "version": "0.1.0",
   "description": "Drizzle ORM adapter for Zanzo ReBAC. Zero-config Zanzibar Tuple Pattern with parameterized SQL.",
   "keywords": [
     "@zanzojs/core",

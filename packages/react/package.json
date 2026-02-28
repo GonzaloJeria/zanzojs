@@ -1,6 +1,6 @@
 {
   "name": "@zanzojs/react",
-  "version": "0.1.0-beta.2",
+  "version": "0.1.0",
   "description": "React bindings for Zanzo ReBAC. O(1) permission checks via ZanzoProvider and useZanzo hook.",
   "keywords": [
     "@zanzojs/core",

@@ -1,6 +1,6 @@
 {
   "name": "@zanzojs/core",
-  "version": "0.1.0-beta.2",
+  "version": "0.1.0",
   "description": "Isomorphic ReBAC Authorization for the Modern Web. Inspired by Google Zanzibar.",
   "keywords": [
     "rebac",
