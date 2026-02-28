@@ -1,4 +1,5 @@
 import type { CompiledPermissions } from '../compiler/index';
+import type { AccessibleResult } from '../types/index';
 
 /**
  * A lightweight, ultra-fast O(1) ReBAC Client intended for Frontend applications
@@ -45,6 +46,34 @@ export class ZanzoClient {
     }
 
     return allowedActions.has(action);
+  }
+
+  /**
+   * Returns all accessible objects of the given entity type with their allowed actions.
+   * 
+   * **Complexity: O(n)** where n is the number of unique resources in the snapshot.
+   * Unlike can() which is O(1), this method iterates the full snapshot.
+   * For large snapshots (1000+ resources), use this sparingly — prefer can()
+   * for per-resource checks in render loops.
+   * 
+   * @example
+   * const docs = client.listAccessible('Document')
+   * // → [{ object: 'Document:doc1', actions: ['read', 'write'] }]
+   */
+  public listAccessible(entityType: string): AccessibleResult[] {
+    const results: AccessibleResult[] = [];
+    const prefix = `${entityType}:`;
+
+    for (const [objectKey, actions] of this.permissions) {
+      if (objectKey.startsWith(prefix)) {
+        results.push({
+          object: objectKey,
+          actions: [...actions],
+        });
+      }
+    }
+
+    return results;
   }
 
   /**

@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.0] — 2026-02-28
+
+### Added
+- Fluent API: `engine.for().can().on()`, `engine.grant().to().on()`, `engine.revoke().from().on()`
+- `listAccessible(entityType)`: Returns all accessible objects with their allowed actions
+- Field-level granularity: `engine.for('User:alice').can('edit').on('Review:cert1#strengths')`
+- Temporal permissions: `engine.grant().to().on().until(date)`
+- `engine.load(tuples)`: Bulk hydration from database. Replaces `addTuples()` with clearer semantics. Silently skips expired tuples during load.
+- `engine.cleanup()`: Removes expired tuples from the index
+
+### Deprecated
+- `engine.addTuple()`: Use `engine.grant()` instead
+- `engine.addTuples()`: Use `engine.load(tuples)` instead  
+- `engine.can()`: Use `engine.for().can().on()` instead
+
+### Breaking Changes
+- None — full backward compatibility maintained
+
 ## [0.1.0-beta.2] — 2026-02-28
 
 ### Fixed

@@ -46,7 +46,7 @@ export async function GET(request: NextRequest) {
     .where(like(zanzoTuples.relation, 'workspace'))
     .all();
 
-  requestEngine.addTuples([...structuralTuples, ...userTuples]);
+  requestEngine.load([...structuralTuples, ...userTuples]);
 
   // Compile the flat snapshot for the frontend
   const snapshot = createZanzoSnapshot(requestEngine, actor);

@@ -191,9 +191,9 @@ export async function GET(request: NextRequest) {
   const structuralTuples = db.select().from(zanzoTuples)
     .where(like(zanzoTuples.relation, 'workspace')).all();
 
-  // Create per-request engine and compile snapshot
+  // Create per-request engine and hydrate it
   const engine = new ZanzoEngine(schema);
-  engine.addTuples([...structuralTuples, ...userTuples]);
+  engine.load([...structuralTuples, ...userTuples]); // ← load() for DB hydration
 
   // Output: { "Module:ws1_facturacion": ["create","read","update","delete"], ... }
   const snapshot = createZanzoSnapshot(engine, actor);
@@ -229,12 +229,25 @@ function WorkspaceModules({ workspaceId }) {
   const moduleRef = `Module:${workspaceId}_facturacion`;
 
   // Check each action independently
-  can('create', moduleRef); // true for manager/contributor/workspace.admin
-  can('read',   moduleRef); // true for all roles
-  can('update', moduleRef); // true for manager/contributor/editor/workspace.admin
-  can('delete', moduleRef); // true for manager/workspace.admin only
+  // Returns true/false based on the server-compiled snapshot
+  const canCreate = can('create', moduleRef); 
+  const canRead   = can('read',   moduleRef);
+  const canUpdate = can('update', moduleRef);
+  const canDelete = can('delete', moduleRef);
 }
 ```
+
+---
+
+### Step 6: Server-side Checks (Optional)
+
+If you need to check permissions on the server (e.g. in a Middleware or API route), use the fluent API:
+
+```typescript
+const isAllowed = engine.for('User:alice').can('read').on('Module:ws1_facturacion');
+```
+
+---
 
 ---
 
@@ -276,6 +289,7 @@ apps/test-app/
 | **Tuple Collapse** | `revoke/route.ts` | Symmetric revocation |
 | **Snapshot Compilation** | `permissions/route.ts` | Server → flat JSON |
 | **Client Hydration** | `page.tsx` | O(1) checks via ZanzoProvider |
+| **Fluent API** | `load()` / `can()` | Readable permission checks |
 | **Granular CRUD** | `can('create'/'read'/'update'/'delete')` | Per-action authorization |
 
 ---

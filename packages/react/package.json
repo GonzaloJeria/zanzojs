@@ -1,6 +1,6 @@
 {
   "name": "@zanzojs/react",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "React bindings for Zanzo ReBAC. O(1) permission checks via ZanzoProvider and useZanzo hook.",
   "keywords": [
     "@zanzojs/core",
@@ -43,7 +43,7 @@
     "test:types": "vitest run --typecheck"
   },
   "peerDependencies": {
-    "@zanzojs/core": "^0.1.0-beta.0",
+    "@zanzojs/core": "^0.2.0",
     "react": ">=18.0.0",
     "react-dom": ">=18.0.0"
   },

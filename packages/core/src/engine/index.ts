@@ -1,5 +1,7 @@
 import type { SchemaData } from '../builder/index';
-import { parseEntityRef, RELATION_PATH_SEPARATOR } from '../ref/index';
+import type { Tuple } from '../types/index';
+import { parseEntityRef, RELATION_PATH_SEPARATOR, FIELD_SEPARATOR } from '../ref/index';
+import { ForBuilder, GrantBuilder, RevokeBuilder } from '../fluent/index';
 
 /**
  * Represents a logical ReBAC relational tuple binding a Subject to an Object via a Relation.
@@ -35,6 +37,17 @@ export type ExtractSchemaActions<
 > = TSchema[TResource]['actions'][number];
 
 /**
+ * Internal stored tuple with optional metadata (e.g. expiration).
+ * @internal
+ */
+interface StoredTuple {
+  subject: string;
+  relation: string;
+  object: string;
+  expiresAt?: Date;
+}
+
+/**
  * Advanced Generic ReBAC Engine.
  * Takes a Schema initialized by ZanzoBuilder as its type base to offer strict autocomplete.
  */
@@ -42,6 +55,8 @@ export class ZanzoEngine<TSchema extends SchemaData> {
   private schema: Readonly<TSchema>;
   // Map<ObjectIdentifier, Map<Relation, Set<SubjectIdentifier>>>
   private index = new Map<string, Map<string, Set<string>>>();
+  // Parallel store for tuple metadata (expiration)
+  private tupleStore: StoredTuple[] = [];
 
   constructor(schema: Readonly<TSchema>) {
     this.schema = schema;
@@ -77,13 +92,67 @@ export class ZanzoEngine<TSchema extends SchemaData> {
   }
 
   /**
+   * Validates that a field-level identifier contains at most one '#' separator.
+   */
+  private validateFieldSeparator(input: string, label: string): void {
+    const firstHash = input.indexOf(FIELD_SEPARATOR);
+    if (firstHash !== -1 && input.indexOf(FIELD_SEPARATOR, firstHash + 1) !== -1) {
+      throw new Error(
+        `[Zanzo] Invalid ${label}: "${input}" contains multiple '${FIELD_SEPARATOR}' separators. ` +
+        `An object identifier may contain at most one '#' for field-level granularity.`
+      );
+    }
+  }
+
+  // ─── Fluent API ───────────────────────────────────────────────────
+
+  /**
+   * Starts a fluent permission check for a specific actor.
+   *
+   * @example
+   * engine.for('User:alice').can('view').on('Document:doc1')
+   * engine.for('User:alice').listAccessible('Document')
+   */
+  public for(actor: string): ForBuilder<TSchema> {
+    return new ForBuilder(this, actor);
+  }
+
+  /**
+   * Starts a fluent grant chain to add a relation tuple.
+   *
+   * @example
+   * engine.grant('owner').to('User:alice').on('Document:doc1')
+   * engine.grant('viewer').to('User:bob').on('Document:doc1').until(new Date())
+   */
+  public grant(relation: string): GrantBuilder<TSchema> {
+    return new GrantBuilder(this, relation);
+  }
+
+  /**
+   * Starts a fluent revoke chain to remove a relation tuple.
+   *
+   * @example
+   * engine.revoke('owner').from('User:alice').on('Document:doc1')
+   */
+  public revoke(relation: string): RevokeBuilder<TSchema> {
+    return new RevokeBuilder(this, relation);
+  }
+
+  // ─── Tuple Management ─────────────────────────────────────────────
+
+  /**
    * Injects a relation tuple into the in-memory store.
    * Issue #3: Validates all tuple fields before storing to prevent graph poisoning.
+   *
+   * @deprecated Use `engine.grant(relation).to(subject).on(object)` instead.
+   * Will be removed in v1.0.0.
    */
-  public addTuple(tuple: RelationTuple): void {
+  public addTuple(tuple: RelationTuple | Tuple): void {
     this.validateInput(tuple.subject, 'subject');
     this.validateInput(tuple.object, 'object');
     this.validateInput(tuple.relation, 'relation');
+    this.validateFieldSeparator(tuple.object, 'object');
+    this.validateFieldSeparator(tuple.subject, 'subject');
 
     let objectRelations = this.index.get(tuple.object);
     if (!objectRelations) {
@@ -98,14 +167,80 @@ export class ZanzoEngine<TSchema extends SchemaData> {
     }
 
     subjectsSet.add(tuple.subject);
+
+    // Store metadata for expiration support
+    const storedTuple: StoredTuple = {
+      subject: tuple.subject,
+      relation: tuple.relation,
+      object: tuple.object,
+    };
+    if ('expiresAt' in tuple && tuple.expiresAt) {
+      storedTuple.expiresAt = tuple.expiresAt;
+    }
+    this.tupleStore.push(storedTuple);
   }
 
   /**
    * Injects multiple relation tuples into the in-memory store.
+   *
+   * @deprecated Use `engine.load(tuples)` instead.
+   * Will be removed in v1.0.0.
    */
-  public addTuples(tuples: RelationTuple[]): void {
+  public addTuples(tuples: (RelationTuple | Tuple)[]): void {
     for (const tuple of tuples) {
       this.addTuple(tuple);
+    }
+  }
+
+  /**
+   * Hydrates the engine with tuples loaded from an external source (e.g. database).
+   * Use this instead of `addTuples()` when loading existing relationships at request time.
+   * Supports `expiresAt` for temporal permissions — expired tuples are silently ignored.
+   *
+   * **Semantic difference:**
+   * - `grant()` — otorga un permiso nuevo (write operation)
+   * - `load()` — hidrata el engine con permisos existentes desde DB (read operation)
+   *
+   * @example
+   * const rows = await db.select().from(zanzoTuples).where(...)
+   * const engine = new ZanzoEngine(schema)
+   * engine.load(rows)
+   */
+  public load(tuples: (RelationTuple | Tuple)[]): void {
+    const now = new Date();
+    for (const tuple of tuples) {
+      if ('expiresAt' in tuple && tuple.expiresAt && tuple.expiresAt <= now) {
+        continue; // Silently skip expired tuples during hydration
+      }
+      this.addTuple(tuple);
+    }
+  }
+
+  /**
+   * Removes a specific tuple from the in-memory store.
+   * Used internally by the Fluent API's revoke chain.
+   */
+  public removeTuple(tuple: RelationTuple | Tuple): void {
+    const objectRelations = this.index.get(tuple.object);
+    if (objectRelations) {
+      const subjectsSet = objectRelations.get(tuple.relation);
+      if (subjectsSet) {
+        subjectsSet.delete(tuple.subject);
+        if (subjectsSet.size === 0) {
+          objectRelations.delete(tuple.relation);
+        }
+        if (objectRelations.size === 0) {
+          this.index.delete(tuple.object);
+        }
+      }
+    }
+
+    // Remove from tuple store
+    const idx = this.tupleStore.findIndex(
+      (t) => t.subject === tuple.subject && t.relation === tuple.relation && t.object === tuple.object
+    );
+    if (idx !== -1) {
+      this.tupleStore.splice(idx, 1);
     }
   }
 
@@ -114,6 +249,49 @@ export class ZanzoEngine<TSchema extends SchemaData> {
    */
   public clearTuples(): void {
     this.index.clear();
+    this.tupleStore = [];
+  }
+
+  /**
+   * Removes expired tuples from the engine's in-memory index.
+   * Returns the number of tuples removed.
+   * 
+   * **When to use:** Only relevant for long-lived engine instances such as
+   * background workers or WebSocket servers that keep a ZanzoEngine in memory
+   * for extended periods.
+   * 
+   * **Not needed in per-request flows:** engine.load() already skips expired
+   * tuples during hydration. If you create a fresh engine per request,
+   * cleanup() will always return 0.
+   */
+  public cleanup(): number {
+    const now = new Date();
+    let removed = 0;
+
+    const expiredTuples = this.tupleStore.filter((t) => t.expiresAt && t.expiresAt <= now);
+
+    for (const tuple of expiredTuples) {
+      this.removeTuple(tuple);
+      removed++;
+    }
+
+    return removed;
+  }
+
+  // ─── Evaluation ───────────────────────────────────────────────────
+
+  /**
+   * Checks if a tuple is expired.
+   * @internal
+   */
+  private isExpired(subject: string, relation: string, object: string): boolean {
+    const stored = this.tupleStore.find(
+      (t) => t.subject === subject && t.relation === relation && t.object === object
+    );
+    if (stored?.expiresAt && stored.expiresAt <= new Date()) {
+      return true;
+    }
+    return false;
   }
 
   /**
@@ -135,7 +313,10 @@ export class ZanzoEngine<TSchema extends SchemaData> {
     this.validateInput(actor, 'actor');
     this.validateInput(resource, 'resource');
 
-    const resourceType = parseEntityRef(resource).type;
+    // For field-level resources (e.g. Review:cert1#strengths), extract the entity type
+    // from the base object before the '#'
+    const baseResource = resource.includes(FIELD_SEPARATOR) ? resource.split(FIELD_SEPARATOR)[0]! : resource;
+    const resourceType = parseEntityRef(baseResource).type;
     const resourceSchema = this.schema[resourceType as keyof TSchema];
 
     if (!resourceSchema) return [];
@@ -178,7 +359,7 @@ export class ZanzoEngine<TSchema extends SchemaData> {
       const resolved = this.checkRelationsRecursive(
         actor,
         [parts],
-        resource,
+        resource, // Use the original resource (potentially with field separator)
         new Set<string>(),
         0,
       );
@@ -205,6 +386,9 @@ export class ZanzoEngine<TSchema extends SchemaData> {
    * @param action The specific action to perform (e.g., 'edit'), strictly typed.
    * @param resource The target resource entity string identifier (e.g., 'Project:A')
    * @returns boolean True if authorized, false otherwise.
+   *
+   * @deprecated Use `engine.for(actor).can(action).on(resource)` instead.
+   * Will be removed in v1.0.0.
    */
   public can<
     TResourceName extends Extract<ExtractSchemaResources<TSchema>, string>,
@@ -213,7 +397,9 @@ export class ZanzoEngine<TSchema extends SchemaData> {
     this.validateInput(actor, 'actor');
     this.validateInput(resource, 'resource');
 
-    const resourceType = parseEntityRef(resource).type as TResourceName;
+    // For field-level resources, extract the entity type from the base object
+    const baseResource = resource.includes(FIELD_SEPARATOR) ? resource.split(FIELD_SEPARATOR)[0]! : resource;
+    const resourceType = parseEntityRef(baseResource).type as TResourceName;
     const resourceSchema = this.schema[resourceType];
 
     if (!resourceSchema || !resourceSchema.actions.includes(action as any)) {
@@ -234,7 +420,7 @@ export class ZanzoEngine<TSchema extends SchemaData> {
     // un hash global estático provocará un falso negativo en el caché `visited` y denegará permisos erróneamente.
     // (Esto causaba que stress.test.ts fallara). Mantenemos la concatenación selectiva pasada por recursión.
 
-    // Call the recursive engine internal handler
+    // Call the recursive engine internal handler (use the original resource, potentially with '#')
     return this.checkRelationsRecursive(actor, preSplitRoutes, resource, new Set<string>(), 0);
   }
 
@@ -288,6 +474,10 @@ export class ZanzoEngine<TSchema extends SchemaData> {
       if (routeParts.length === 1) {
         // Direct relation base case check O(1)
         if (subjectsForRelation.has(actor)) {
+          // Check expiration before granting
+          if (this.isExpired(actor, currentRelation, currentTarget)) {
+            continue;
+          }
           return true;
         }
       } else {
@@ -298,6 +488,11 @@ export class ZanzoEngine<TSchema extends SchemaData> {
 
         // Optimize: we execute branching recursively into subsets, and stop at first generic success.
         for (const intermediateSubject of subjectsForRelation) {
+          // Check if the intermediate tuple is expired
+          if (this.isExpired(intermediateSubject, currentRelation, currentTarget)) {
+            continue;
+          }
+
           const isGranted = this.checkRelationsRecursive(
             actor,
             [remainingRoute], // Pass down the remaining route only

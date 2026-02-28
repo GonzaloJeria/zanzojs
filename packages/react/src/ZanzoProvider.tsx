@@ -1,8 +1,17 @@
 import React, { createContext, useMemo, ReactNode } from 'react';
-import { ZanzoClient } from '@zanzojs/core';
+import { ZanzoClient, AccessibleResult } from '@zanzojs/core';
 
 export interface ZanzoContextValue {
     can: (action: string, resource: string) => boolean;
+    /**
+     * Returns all accessible objects of the given entity type with their allowed actions.
+     * 
+     * **Complexity: O(n)** where n is the number of unique resources in the snapshot.
+     * Unlike can() which is O(1), this method iterates the full snapshot.
+     * For large snapshots (1000+ resources), use this sparingly — prefer can()
+     * for per-resource checks in render loops.
+     */
+    listAccessible: (entityType: string) => AccessibleResult[];
 }
 
 export const ZanzoContext = createContext<ZanzoContextValue | null>(null);
@@ -27,7 +36,8 @@ export const ZanzoProvider: React.FC<ZanzoProviderProps> = ({ snapshot, children
 
     // Context value exposed to hooks
     const value = useMemo<ZanzoContextValue>(() => ({
-        can: (action: string, resource: string) => client.can(action, resource)
+        can: (action: string, resource: string) => client.can(action, resource),
+        listAccessible: (entityType: string) => client.listAccessible(entityType)
     }), [client]);
 
     return (

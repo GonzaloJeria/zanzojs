@@ -21,6 +21,14 @@ export const ENTITY_REF_SEPARATOR = ':' as const;
  */
 export const RELATION_PATH_SEPARATOR = '.' as const;
 
+/**
+ * The canonical separator for field-level granularity.
+ * Allows fine-grained permissions on specific fields of an entity
+ * (e.g. 'Review:cert1#strengths' targets the 'strengths' field of Review:cert1).
+ * A valid object identifier may contain at most one '#'.
+ */
+export const FIELD_SEPARATOR = '#' as const;
+
 /** @internal Shared control-character regex matching validateInput in ZanzoEngine */
 const CONTROL_CHARS_REGEX = /[\x00-\x1F\x7F]/;
 

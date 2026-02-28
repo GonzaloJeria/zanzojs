@@ -168,6 +168,50 @@ describe('Field-Level Granularity', () => {
   });
 });
 
+// ─── engine.load() ─────────────────────────────────────────────────
+describe('engine.load() (DB Hydration)', () => {
+  it('hydrates correctly from an array of tuples', () => {
+    const engine = new ZanzoEngine(schema);
+    engine.load([
+      { subject: 'User:alice', relation: 'owner', object: 'Document:doc1' },
+      { subject: 'User:bob', relation: 'viewer', object: 'Document:doc2' },
+    ]);
+
+    expect(engine.for('User:alice').can('write').on('Document:doc1')).toBe(true);
+    expect(engine.for('User:bob').can('read').on('Document:doc2')).toBe(true);
+  });
+
+  it('silently ignores tuples with expired expiresAt', () => {
+    const engine = new ZanzoEngine(schema);
+    const pastDate = new Date(Date.now() - 60_000);
+
+    engine.load([
+      { subject: 'User:alice', relation: 'owner', object: 'Document:doc1' },
+      { subject: 'User:bob', relation: 'viewer', object: 'Document:doc2', expiresAt: pastDate },
+    ]);
+
+    expect(engine.for('User:alice').can('write').on('Document:doc1')).toBe(true);
+    // Bob's tuple was expired and should have been silently skipped
+    expect(engine.for('User:bob').can('read').on('Document:doc2')).toBe(false);
+  });
+
+  it('accepts an empty array without errors', () => {
+    const engine = new ZanzoEngine(schema);
+    expect(() => engine.load([])).not.toThrow();
+  });
+
+  it('loads tuples with expiresAt in the future correctly', () => {
+    const engine = new ZanzoEngine(schema);
+    const futureDate = new Date(Date.now() + 60_000);
+
+    engine.load([
+      { subject: 'User:carol', relation: 'viewer', object: 'Document:doc3', expiresAt: futureDate },
+    ]);
+
+    expect(engine.for('User:carol').can('read').on('Document:doc3')).toBe(true);
+  });
+});
+
 // ─── Backward Compatibility (Deprecations) ──────────────────────────
 describe('Backward Compatibility', () => {
   it('addTuple still functions after deprecation', () => {

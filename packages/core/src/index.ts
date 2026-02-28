@@ -8,3 +8,12 @@ export * from './client/index';
 export * from './expander/index';
 export { collapseTuples } from './expander/collapse';
 export type { CollapseContext } from './expander/collapse';
+export {
+  ForBuilder,
+  CanBuilder,
+  GrantBuilder,
+  GrantToBuilder,
+  GrantOnBuilder,
+  RevokeBuilder,
+  RevokeFromBuilder,
+} from './fluent/index';

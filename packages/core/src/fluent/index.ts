@@ -67,8 +67,17 @@ export class CanBuilder<TSchema extends SchemaData> {
 }
 
 /**
- * Intermediate builder for `engine.grant(relation)`.
- * Chain with `.to(subject).on(object)`.
+ * Grants a permission by adding a tuple to the engine's in-memory index.
+ * 
+ * **When to use:**
+ * - Unit tests: hydrate the engine without a database
+ * - Seeds and development scripts
+ * - Permission simulation sandboxes (evaluate without persisting)
+ * 
+ * **Not for production writes:** In a per-request serverless flow, mutations
+ * via grant() are ephemeral and disappear when the request ends.
+ * To persist permissions, write directly to your database and use
+ * expandTuples() to materialize derived tuples.
  */
 export class GrantBuilder<TSchema extends SchemaData> {
   constructor(
@@ -122,8 +131,17 @@ export class GrantOnBuilder<TSchema extends SchemaData> {
 }
 
 /**
- * Intermediate builder for `engine.revoke(relation)`.
- * Chain with `.from(subject).on(object)`.
+ * Revokes a permission by removing a tuple from the engine's in-memory index.
+ * 
+ * **When to use:**
+ * - Unit tests: hydrate the engine without a database
+ * - Seeds and development scripts
+ * - Permission simulation sandboxes (evaluate without persisting)
+ * 
+ * **Not for production writes:** In a per-request serverless flow, mutations
+ * via revoke() are ephemeral and disappear when the request ends.
+ * To persist permissions, write directly to your database and use
+ * collapseTuples() to remove derived tuples.
  */
 export class RevokeBuilder<TSchema extends SchemaData> {
   constructor(

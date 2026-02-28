@@ -86,8 +86,7 @@ export const documents = sqliteTable('documents', {
 });
 ```
 
-### Step 4: Write-Time Materialization
-Whenever a user creates a resource or joins a team, you just insert a Tuple. But since Zanzo uses **Query Pushdown** to make reads blazing fast in SQL, nested relationships (like `workspace.owner` -> `Document.edit`) must be pre-calculated during the write operation using `expandTuples()`.
+Whenever a user creates a resource or joins a team, you just insert a Tuple. But since Zanzo uses **Query Pushdown** to make reads blazing fast in SQL, nested relationships (like `workspace.owner` -> `Document.edit`) must be pre-calculated during the write operation using `expandTuples()` and removed using `collapseTuples()`.
 
 ```typescript
 import { expandTuples } from '@zanzojs/core';
@@ -135,14 +134,14 @@ For the UI, you don't want to make an HTTP request every time a button renders. 
 
 **Server:**
 ```typescript
-import { createZanzoSnapshot } from '@zanzojs/core';
+import { createZanzoSnapshot, ZanzoEngine } from '@zanzojs/core';
 
 // In your root layout/SSR:
 const userTuples = await db.select().from(zanzoTuples).where(like(zanzoTuples.subject, `User:${userId}%`));
 
 // Create a fresh engine per request — never reuse a shared instance
 const requestEngine = new ZanzoEngine(schema);
-requestEngine.addTuples(userTuples);
+requestEngine.load(userTuples); // ← load() for DB hydration
 
 const flatSnapshot = createZanzoSnapshot(requestEngine, `User:${userId}`); 
 // E.g. { "Document:A": ["read", "edit"], "Document:B": ["read"] }
