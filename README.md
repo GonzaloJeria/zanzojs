@@ -1,9 +1,9 @@
 # ZanzoJS
 
+[![CI](https://github.com/GonzaloJeria/zanzo/actions/workflows/ci.yml/badge.svg)](https://github.com/GonzaloJeria/zanzo/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/@zanzojs/core.svg?style=flat-square)](https://www.npmjs.com/package/@zanzojs/core)
-[![TypeScript Strict](https://img.shields.io/badge/TypeScript-Strict-blue.svg?style=flat-square)](https://www.typescriptlang.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](https://opensource.org/licenses/MIT)
-[![0 Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen.svg?style=flat-square)](https://github.com/GonzaloJeria/zanzo)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square)](CONTRIBUTING.md)
 
 Zanzo is an isomorphic **Relationship-Based Access Control (ReBAC)** ecosystem for modern TypeScript applications. It was inspired by the Google Zanzibar paper to solve the complex authorization problems that traditional Role-Based Access Control (RBAC) struggles with, such as strict multi-tenancy, granular document sharing, and nested organizational permissions.
 

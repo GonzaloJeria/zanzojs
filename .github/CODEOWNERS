@@ -1,0 +1,8 @@
+# All files require review from the maintainer
+* @GonzaloJeria
+
+# Core package — extra scrutiny
+/packages/core/ @GonzaloJeria
+/packages/drizzle/ @GonzaloJeria
+/packages/react/ @GonzaloJeria
+
