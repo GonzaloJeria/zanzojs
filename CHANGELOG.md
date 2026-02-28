@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.1.0-beta.1] — 2026-02-27
+## [0.1.0-beta.2] — 2026-02-28
 
 ### Fixed
 - `@zanzojs/core`: Fixed documentation example using `container.read` (action) 

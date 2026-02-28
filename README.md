@@ -138,10 +138,13 @@ For the UI, you don't want to make an HTTP request every time a button renders. 
 import { createZanzoSnapshot } from '@zanzojs/core';
 
 // In your root layout/SSR:
-const myTuples = await db.select().from(zanzoTuples).where(like(zanzoTuples.subject, `User:${userId}%`));
+const userTuples = await db.select().from(zanzoTuples).where(like(zanzoTuples.subject, `User:${userId}%`));
 
-const tempEngine = new ZanzoEngine(schema).addTuples(myTuples);
-const flatSnapshot = createZanzoSnapshot(tempEngine, `User:${userId}`); 
+// Create a fresh engine per request — never reuse a shared instance
+const requestEngine = new ZanzoEngine(schema);
+requestEngine.addTuples(userTuples);
+
+const flatSnapshot = createZanzoSnapshot(requestEngine, `User:${userId}`); 
 // E.g. { "Document:A": ["read", "edit"], "Document:B": ["read"] }
 ```
 
