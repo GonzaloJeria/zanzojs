@@ -1,6 +1,7 @@
 {
   "name": "zanzo-monorepo",
   "private": true,
+  "type": "module",
   "packageManager": "pnpm@10.24.0",
   "engines": {
     "node": ">=20.0"
@@ -15,7 +16,8 @@
     "changeset": "changeset",
     "version-packages": "changeset version",
     "release": "changeset publish",
-    "dev:test": "pnpm --filter test-app dev"
+    "dev:test": "pnpm --filter test-app dev",
+    "cli": "node packages/cli/dist/index.js"
   },
   "devDependencies": {
     "turbo": "latest",

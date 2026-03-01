@@ -23,6 +23,7 @@ The Zanzo ecosystem is split into modular packages so you only bundle exactly wh
 - **[`@zanzojs/core`](./packages/core)**: The zero-dependency core engine. Schema Builder, In-memory Graph Engine, AST Generator, and flat Client logic.
 - **[`@zanzojs/drizzle`](./packages/drizzle)**: The official Drizzle ORM adapter. Translates Zanzo ASTs into safe, parameterized SQL queries.
 - **[`@zanzojs/react`](./packages/react)**: React contextual bindings. Enables synchronous, zero-latency permission checks in `O(1)` time.
+- **[`@zanzojs/cli`](./packages/cli)**: Official CLI. Scaffold your project with `npx @zanzojs/cli init`.
 
 ---
 

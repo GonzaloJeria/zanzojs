@@ -43,3 +43,6 @@ A continuación se detalla el plan de desarrollo para llegar a la versión compl
 
 - [x] **Fase 15: Test App End-to-End (apps/test-app)**
   Aplicación Next.js 14 + SQLite (better-sqlite3) + Drizzle ORM dentro del monorepo. Prueba el flujo completo: schema → expandTuples/collapseTuples → snapshot → ZanzoProvider → useZanzo(). Portal multi-workspace con 3 usuarios (alice/admin, bob/viewer, carol/sin acceso) y 2 workspaces con módulos dinámicos. Verificado via browser testing.
+
+- [x] **Fase 16: @zanzojs/cli — Interactive Project Scaffolding**
+  CLI interactivo para generar boilerplate (schema, migraciones, rutas API y contexto de agentes) en segundos. Soporta Next.js, Express y Hono.
