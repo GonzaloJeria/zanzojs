@@ -12,6 +12,8 @@ export interface EntityDefinition<
   >;
 }
 
+import { ZanzoError, ZanzoErrorCode } from '../errors';
+
 /**
  * Internal representation of the ReBAC schema.
  */
@@ -139,7 +141,8 @@ export function mergeSchemas<T extends Readonly<SchemaData>[]>(
   for (const schema of schemas) {
     for (const [entityName, definition] of Object.entries(schema)) {
       if (unified[entityName]) {
-        throw new Error(
+        throw new ZanzoError(
+          ZanzoErrorCode.SCHEMA_COLLISION,
           `[Zanzo] Schema Merge Collision: The entity '${entityName}' is defined in multiple schemas. Please ensure your domain segments are uniquely scoped.`,
         );
       }

@@ -46,3 +46,12 @@ A continuación se detalla el plan de desarrollo para llegar a la versión compl
 
 - [x] **Fase 16: @zanzojs/cli — Interactive Project Scaffolding**
   CLI interactivo para generar boilerplate (schema, migraciones, rutas API y contexto de agentes) en segundos. Soporta Next.js, Express y Hono.
+
+- [x] **Fase 17: v0.3.0 — Improvement Sprint (Bugs, TypeScript, DX, Performance)**
+  Corrección de race conditions en `materializeDerivedTuples`, bulk delete helper, `deduplicateTuples`. TypeScript estricto en toda la Fluent API con genéricos que infieren entidades, acciones y relaciones desde el schema. `ZanzoError` con 10 códigos estructurados incluyendo `MISSING_RELATION` (validación en constructor) y `CYCLE_DETECTED` (detección de referencias circulares). Debug trace con `check().on()`. Cache con TTL, `canBatch()`, y filtro `entityTypes` en snapshots.
+
+- [ ] **Fase 18: v0.4.0 — @zanzojs/cli inspect & check**
+  Comandos CLI para inspección y verificación de permisos en tiempo de desarrollo:
+  - `zanzo inspect` — Carga un archivo JSON `{subject, relation, object}[]` y visualiza el grafo de relaciones en formato legible.
+  - `zanzo check <actor> <action> <resource>` — Carga el schema desde `zanzo.config.ts`, evalúa el permiso y muestra el resultado con trace detallado.
+  - Soporte para carga automática del schema desde `zanzo.config.ts` usando resolución de TypeScript nativa.

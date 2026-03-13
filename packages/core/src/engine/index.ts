@@ -1,7 +1,11 @@
 import type { SchemaData } from '../builder/index';
-import type { Tuple } from '../types/index';
+import type { Tuple, AllSchemaRelations, SchemaEntityRef } from '../types/index';
 import { parseEntityRef, RELATION_PATH_SEPARATOR, FIELD_SEPARATOR } from '../ref/index';
 import { ForBuilder, GrantBuilder, RevokeBuilder } from '../fluent/index';
+import { ZanzoError, ZanzoErrorCode } from '../errors';
+import type { CheckResult, TraceStep } from './trace';
+import { PermissionCache } from './cache';
+import type { CacheOptions } from './cache';
 
 /**
  * Represents a logical ReBAC relational tuple binding a Subject to an Object via a Relation.
@@ -57,9 +61,68 @@ export class ZanzoEngine<TSchema extends SchemaData> {
   private index = new Map<string, Map<string, Set<string>>>();
   // Parallel store for tuple metadata (expiration)
   private tupleStore: StoredTuple[] = [];
+  // Optional permission cache with TTL
+  private cache: PermissionCache | null = null;
 
   constructor(schema: Readonly<TSchema>) {
     this.schema = schema;
+    this.validateSchema();
+  }
+
+  /**
+   * Validates that all permission paths reference relations that exist in the entity.
+   * Called once during construction to catch schema typos early.
+   * @throws {ZanzoError} MISSING_RELATION if a permission path references an undefined relation.
+   */
+  private validateSchema(): void {
+    for (const [entityName, definition] of Object.entries(this.schema) as [string, any][]) {
+      if (!definition.permissions || !definition.relations) continue;
+
+      const definedRelations = new Set(Object.keys(definition.relations));
+
+      for (const [action, paths] of Object.entries(definition.permissions) as [string, string[]][]) {
+        if (!Array.isArray(paths)) continue;
+
+        for (const path of paths) {
+          // The first segment of the path is the relation name (e.g. 'workspace' in 'workspace.admin')
+          const firstSegment = path.split(RELATION_PATH_SEPARATOR)[0]!;
+
+          if (!definedRelations.has(firstSegment)) {
+            throw new ZanzoError(
+              ZanzoErrorCode.MISSING_RELATION,
+              `[Zanzo] Missing relation: Entity "${entityName}" permission "${action}" references ` +
+              `relation "${firstSegment}" (in path "${path}"), but this relation is not defined ` +
+              `in the entity's relations map. Defined relations: [${[...definedRelations].join(', ')}].`
+            );
+          }
+        }
+      }
+    }
+  }
+
+  // ─── Cache API ────────────────────────────────────────────────────
+
+  /**
+   * Enables the in-memory permission cache.
+   * Subsequent `can()` calls will be cached with the specified TTL.
+   * Cache is automatically invalidated when tuples change.
+   *
+   * @example
+   * ```ts
+   * engine.enableCache({ ttlMs: 5000 });
+   * engine.for('User:alice').can('read').on('Document:doc1'); // cache miss → evaluates
+   * engine.for('User:alice').can('read').on('Document:doc1'); // cache hit → O(1)
+   * ```
+   */
+  public enableCache(options?: CacheOptions): void {
+    this.cache = new PermissionCache(options);
+  }
+
+  /**
+   * Disables and clears the permission cache.
+   */
+  public disableCache(): void {
+    this.cache = null;
   }
 
   /**
@@ -83,11 +146,11 @@ export class ZanzoEngine<TSchema extends SchemaData> {
   // Issue #9: Unified validation — previously duplicated between actor and resource validators.
   private validateInput(input: string, label: string): void {
     if (!input || typeof input !== 'string' || input.length > 255) {
-      throw new Error(`[Zanzo] Invalid ${label} input. Must be a non-empty string under 255 characters.`);
+      throw new ZanzoError(ZanzoErrorCode.INVALID_INPUT, `[Zanzo] Invalid ${label} input. Must be a non-empty string under 255 characters.`);
     }
     const controlCharsRegex = /[\x00-\x1F\x7F]/;
     if (controlCharsRegex.test(input)) {
-      throw new Error(`[Zanzo] Security Exception: ${label} input contains illegal unprintable control characters.`);
+      throw new ZanzoError(ZanzoErrorCode.INVALID_INPUT, `[Zanzo] Security Exception: ${label} input contains illegal unprintable control characters.`);
     }
   }
 
@@ -97,7 +160,8 @@ export class ZanzoEngine<TSchema extends SchemaData> {
   private validateFieldSeparator(input: string, label: string): void {
     const firstHash = input.indexOf(FIELD_SEPARATOR);
     if (firstHash !== -1 && input.indexOf(FIELD_SEPARATOR, firstHash + 1) !== -1) {
-      throw new Error(
+      throw new ZanzoError(
+        ZanzoErrorCode.INVALID_FIELD_SEPARATOR,
         `[Zanzo] Invalid ${label}: "${input}" contains multiple '${FIELD_SEPARATOR}' separators. ` +
         `An object identifier may contain at most one '#' for field-level granularity.`
       );
@@ -113,7 +177,7 @@ export class ZanzoEngine<TSchema extends SchemaData> {
    * engine.for('User:alice').can('view').on('Document:doc1')
    * engine.for('User:alice').listAccessible('Document')
    */
-  public for(actor: string): ForBuilder<TSchema> {
+  public for<TActor extends SchemaEntityRef<TSchema> & string>(actor: TActor): ForBuilder<TSchema> {
     return new ForBuilder(this, actor);
   }
 
@@ -124,7 +188,7 @@ export class ZanzoEngine<TSchema extends SchemaData> {
    * engine.grant('owner').to('User:alice').on('Document:doc1')
    * engine.grant('viewer').to('User:bob').on('Document:doc1').until(new Date())
    */
-  public grant(relation: string): GrantBuilder<TSchema> {
+  public grant<TRelation extends AllSchemaRelations<TSchema> & string>(relation: TRelation): GrantBuilder<TSchema> {
     return new GrantBuilder(this, relation);
   }
 
@@ -134,7 +198,7 @@ export class ZanzoEngine<TSchema extends SchemaData> {
    * @example
    * engine.revoke('owner').from('User:alice').on('Document:doc1')
    */
-  public revoke(relation: string): RevokeBuilder<TSchema> {
+  public revoke<TRelation extends AllSchemaRelations<TSchema> & string>(relation: TRelation): RevokeBuilder<TSchema> {
     return new RevokeBuilder(this, relation);
   }
 
@@ -178,6 +242,8 @@ export class ZanzoEngine<TSchema extends SchemaData> {
       storedTuple.expiresAt = tuple.expiresAt;
     }
     this.tupleStore.push(storedTuple);
+    // Invalidate cache on any tuple mutation
+    this.cache?.invalidate();
   }
 
   /**
@@ -242,6 +308,8 @@ export class ZanzoEngine<TSchema extends SchemaData> {
     if (idx !== -1) {
       this.tupleStore.splice(idx, 1);
     }
+    // Invalidate cache on any tuple mutation
+    this.cache?.invalidate();
   }
 
   /**
@@ -250,6 +318,7 @@ export class ZanzoEngine<TSchema extends SchemaData> {
   public clearTuples(): void {
     this.index.clear();
     this.tupleStore = [];
+    this.cache?.invalidate();
   }
 
   /**
@@ -412,6 +481,12 @@ export class ZanzoEngine<TSchema extends SchemaData> {
       return false;
     }
 
+    // Check cache before traversal
+    if (this.cache) {
+      const cached = this.cache.get(actor, action as string, resource);
+      if (cached !== undefined) return cached;
+    }
+
     // Pre-split the allowed routes to avoid running String.split repeatedly during recursion
     const preSplitRoutes: string[][] = allowedRelationsForAction.map((route) => route.split(RELATION_PATH_SEPARATOR));
     
@@ -421,7 +496,12 @@ export class ZanzoEngine<TSchema extends SchemaData> {
     // (Esto causaba que stress.test.ts fallara). Mantenemos la concatenación selectiva pasada por recursión.
 
     // Call the recursive engine internal handler (use the original resource, potentially with '#')
-    return this.checkRelationsRecursive(actor, preSplitRoutes, resource, new Set<string>(), 0);
+    const result = this.checkRelationsRecursive(actor, preSplitRoutes, resource, new Set<string>(), 0);
+
+    // Store result in cache if enabled
+    this.cache?.set(actor, action as string, resource, result);
+
+    return result;
   }
 
   /**
@@ -440,9 +520,11 @@ export class ZanzoEngine<TSchema extends SchemaData> {
     visited: Set<string>,
     depth: number = 0,
     parentSignature: string = '',
+    trace?: TraceStep[],
+    routeLabels?: string[],
   ): boolean {
     if (depth > 50) {
-      throw new Error(`[Zanzo] Security Exception: Maximum relationship depth of 50 exceeded. Graph might contain an infinite cycle or is too heavily nested.`);
+      throw new ZanzoError(ZanzoErrorCode.MAX_DEPTH_EXCEEDED, `[Zanzo] Security Exception: Maximum relationship depth of 50 exceeded. Graph might contain an infinite cycle or is too heavily nested.`);
     }
     
     // Memory Hotspot Optimization (GC Friendly):
@@ -457,6 +539,16 @@ export class ZanzoEngine<TSchema extends SchemaData> {
 
     // If there's absolutely no relations associated with this target, abort the exploration to save cycles
     if (!targetRelationsIndex) {
+      if (trace && routeLabels) {
+        for (let i = 0; i < allowedRoutes.length; i++) {
+          trace.push({
+            path: routeLabels[i] || allowedRoutes[i]!.join('.'),
+            target: currentTarget,
+            found: false,
+            subjects: [],
+          });
+        }
+      }
       return false;
     }
 
@@ -466,26 +558,40 @@ export class ZanzoEngine<TSchema extends SchemaData> {
       const currentRelation = routeParts[0] as string;
       const subjectsForRelation = targetRelationsIndex.get(currentRelation);
 
+      const subjectsList = subjectsForRelation ? [...subjectsForRelation] : [];
+
       // If no subjects possess this relation on the target, skip this route
       if (!subjectsForRelation || subjectsForRelation.size === 0) {
+        if (trace && routeLabels) {
+          trace.push({
+            path: routeLabels[i] || routeParts.join('.'),
+            target: currentTarget,
+            found: false,
+            subjects: [],
+          });
+        }
         continue;
       }
 
       if (routeParts.length === 1) {
         // Direct relation base case check O(1)
-        if (subjectsForRelation.has(actor)) {
-          // Check expiration before granting
-          if (this.isExpired(actor, currentRelation, currentTarget)) {
-            continue;
-          }
-          return true;
+        const found = subjectsForRelation.has(actor) && !this.isExpired(actor, currentRelation, currentTarget);
+        if (trace && routeLabels) {
+          trace.push({
+            path: routeLabels[i] || currentRelation,
+            target: currentTarget,
+            found,
+            subjects: subjectsList,
+          });
         }
+        if (found) return true;
       } else {
         // Inherited nested relation graph exploration
         const remainingRoute = routeParts.slice(1);
         
         const nextSignature = parentSignature ? parentSignature + '.' + currentRelation + `[${i}]` : currentRelation + `[${i}]`;
 
+        let anyFound = false;
         // Optimize: we execute branching recursively into subsets, and stop at first generic success.
         for (const intermediateSubject of subjectsForRelation) {
           // Check if the intermediate tuple is expired
@@ -499,15 +605,75 @@ export class ZanzoEngine<TSchema extends SchemaData> {
             intermediateSubject,
             visited,
             depth + 1,
-            nextSignature
+            nextSignature,
+            trace,
+            routeLabels ? [routeLabels[i] || routeParts.join('.')] : undefined,
           );
 
-          if (isGranted) return true;
+          if (isGranted) {
+            anyFound = true;
+            break;
+          }
         }
+
+        if (trace && routeLabels && !anyFound) {
+          trace.push({
+            path: routeLabels[i] || routeParts.join('.'),
+            target: currentTarget,
+            found: false,
+            subjects: subjectsList,
+          });
+        }
+
+        if (anyFound) return true;
       }
     }
 
     return false;
+  }
+
+  /**
+   * Evaluates a permission check with a detailed trace of each evaluation step.
+   * Used internally by `ForBuilder.check()` — prefer the fluent API:
+   *
+   * ```ts
+   * const { allowed, trace } = engine.for('User:alice').check('write').on('Document:doc1');
+   * ```
+   */
+  public checkWithTrace(actor: string, action: string, resource: string): CheckResult {
+    this.validateInput(actor, 'actor');
+    this.validateInput(resource, 'resource');
+
+    const baseResource = resource.includes(FIELD_SEPARATOR) ? resource.split(FIELD_SEPARATOR)[0]! : resource;
+    const resourceType = parseEntityRef(baseResource).type;
+    const resourceSchema = this.schema[resourceType];
+
+    const trace: TraceStep[] = [];
+
+    if (!resourceSchema || !resourceSchema.actions.includes(action as any)) {
+      return { allowed: false, trace };
+    }
+
+    const allowedRelationsForAction = (resourceSchema.permissions?.[action] || []) as string[];
+
+    if (allowedRelationsForAction.length === 0) {
+      return { allowed: false, trace };
+    }
+
+    const preSplitRoutes: string[][] = allowedRelationsForAction.map((route) => route.split(RELATION_PATH_SEPARATOR));
+
+    const allowed = this.checkRelationsRecursive(
+      actor,
+      preSplitRoutes,
+      resource,
+      new Set<string>(),
+      0,
+      '',
+      trace,
+      allowedRelationsForAction,
+    );
+
+    return { allowed, trace };
   }
 
   /**

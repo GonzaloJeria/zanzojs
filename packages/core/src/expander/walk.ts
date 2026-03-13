@@ -2,6 +2,7 @@ import type { SchemaData } from '../builder/index';
 import type { RelationTuple } from '../engine/index';
 import type { FetchChildrenCallback } from './index';
 import { parseEntityRef, RELATION_PATH_SEPARATOR } from '../ref/index';
+import { ZanzoError, ZanzoErrorCode } from '../errors';
 
 /**
  * Represents a single derived tuple discovered during graph traversal.
@@ -31,6 +32,9 @@ export async function _walkExpansionGraph(
 ): Promise<WalkResult[]> {
   const results: WalkResult[] = [];
   const processedRelations = new Set<string>();
+  // Track visited objects to detect circular data references
+  const visitedObjects = new Set<string>();
+  visitedObjects.add(initialTuple.object);
 
   // Cursor-based queue for O(1) dequeue (Issue #13)
   const queue: RelationTuple[] = [initialTuple];
@@ -39,7 +43,8 @@ export async function _walkExpansionGraph(
   while (cursor < queue.length) {
     // Guard against unbounded expansion (Issue #14)
     if (results.length > maxSize) {
-      throw new Error(
+      throw new ZanzoError(
+        ZanzoErrorCode.EXPANSION_LIMIT,
         `[Zanzo] Security Exception: Tuple expansion exceeded maximum size of ${maxSize}. ` +
         `Possible cycle in schema or data. Configure maxExpansionSize/maxCollapseSize to increase the limit.`
       );
@@ -85,6 +90,19 @@ export async function _walkExpansionGraph(
                   const children = await fetchChildren(currentTuple.object, relName);
                   if (Array.isArray(children)) {
                     for (const child of children) {
+                      // Cycle detection: if this child was already visited during expansion,
+                      // we have a circular reference in the data
+                      if (visitedObjects.has(child)) {
+                        throw new ZanzoError(
+                          ZanzoErrorCode.CYCLE_DETECTED,
+                          `[Zanzo] Circular reference detected during tuple expansion: ` +
+                          `"${child}" was already visited in this expansion chain. ` +
+                          `Path: "${initialTuple.object}" → ... → "${currentTuple.object}" → "${child}". ` +
+                          `Review your schema and data for circular entity relationships.`
+                        );
+                      }
+                      visitedObjects.add(child);
+
                       const result: WalkResult = {
                         subject: currentTuple.subject,
                         relation: derivedRelation,

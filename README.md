@@ -165,6 +165,119 @@ function EditButton({ docId }) {
 }
 ```
 
+---
+
+## Advanced APIs (v0.3.0+)
+
+### Debug Trace — `check().on()`
+Diagnose why a permission was granted or denied:
+
+```typescript
+const result = engine.for('User:alice').check('write').on('Document:doc1');
+console.log(result.allowed); // false
+console.log(result.trace);
+// [
+//   { path: 'owner', target: 'Document:doc1', found: false, subjects: [] },
+//   { path: 'viewer', target: 'Document:doc1', found: true, subjects: ['User:bob'] }
+// ]
+```
+
+### Batch Permission Checks — `canBatch()`
+Check multiple permissions in a single call. Internally, Zanzo optimizes this by grouping checks by resource—it only evaluates the graph for a resource once, sharing the computed context among all actions requested for that resource.
+
+```typescript
+const results = engine.for('User:alice').canBatch([
+  { action: 'read', resource: 'Document:doc1' },
+  { action: 'write', resource: 'Document:doc1' }, // Evaluated in the same traverse pass
+  { action: 'read', resource: 'Document:doc2' },
+]);
+
+results.get('read:Document:doc1');  // true
+results.get('write:Document:doc1'); // true
+results.get('read:Document:doc2');  // false
+```
+
+### Permission Cache — `enableCache()`
+Cache `can()` results with automatic TTL.
+> [!NOTE]
+> The cache is automatically invalidated whenever you mutate tuples via `addTuple`, `removeTuple`, `load`, or `clearTuples`.
+
+```typescript
+engine.enableCache({ ttlMs: 5000 });
+engine.for('User:alice').can('read').on('Document:doc1'); // cache miss → evaluates
+engine.for('User:alice').can('read').on('Document:doc1'); // cache hit → O(1)
+
+engine.grant('viewer').to('User:bob').on('Document:doc1'); // auto-invalidates cache
+engine.disableCache(); // turn off
+```
+
+### Snapshot Filtering — `createZanzoSnapshot({ entityTypes })`
+Reduce snapshot payload by filtering to specific entity types. Extremely useful for SSR (Next.js / Remix) when sending massive amounts of state to the browser.
+
+```typescript
+const snapshot = createZanzoSnapshot(engine, 'User:alice', {
+  entityTypes: ['Document', 'Project'], // Only include these entity types
+});
+```
+
+### Tuple Helpers
+
+```typescript
+import {
+  materializeDerivedTuples, // Computes transitive relationships upon tuple creation
+  removeDerivedTuples,      // Computes transitive relationships upon tuple deletion
+  deduplicateTuples,        // Remove duplicate tuples before INSERT
+  uniqueTupleKey,           // Generate unique key string: 'subject|relation|object'
+  buildBulkDeleteCondition, // Get triples array for bulk SQL DELETE
+} from '@zanzojs/core';
+
+// Deduplication before INSERT
+const unique = deduplicateTuples([...baseTuples, ...derived]);
+await db.insert(zanzoTuples).values(unique).onConflictDoNothing();
+
+// Bulk delete with buildBulkDeleteCondition
+// WARNING: You must filter by all three columns (object, relation, subject) inside a transaction.
+// Filtering only by `object` will accidentally delete other subjects' tuples!
+const toDelete = await removeDerivedTuples({ /* ... */ });
+const conditions = buildBulkDeleteCondition(toDelete);
+
+await db.transaction(async (tx) => {
+  for (const [obj, rel, sub] of conditions) {
+    await tx.delete(zanzoTuples).where(
+      and(
+        eq(zanzoTuples.object, obj),
+        eq(zanzoTuples.relation, rel),
+        eq(zanzoTuples.subject, sub)
+      )
+    );
+  }
+});
+```
+
+### Structured Error Handling
+
+```typescript
+import { ZanzoError, ZanzoErrorCode } from '@zanzojs/core';
+
+try {
+  engine.for('bad-input').can('read').on('Document:1');
+} catch (e) {
+  if (e instanceof ZanzoError) {
+    console.log(e.code);    // 'ZANZO_INVALID_ENTITY_REF'
+    console.log(e.message); // '[Zanzo] Invalid EntityRef: ...'
+  }
+}
+```
+
+### Recommended Database Indexes
+For optimal SQL performance, apply the indexes from [`migrations/recommended-indexes.sql`](./migrations/recommended-indexes.sql):
+
+```sql
+CREATE UNIQUE INDEX idx_zanzo_unique_tuple ON zanzo_tuples (subject, relation, object);
+CREATE INDEX idx_zanzo_subject_relation ON zanzo_tuples (subject, relation);
+CREATE INDEX idx_zanzo_object_relation ON zanzo_tuples (object, relation);
+```
+
 ## License
 
 MIT © Gonzalo Jeria

@@ -1,4 +1,3 @@
-import type { CompiledPermissions } from '../compiler/index';
 import type { AccessibleResult } from '../types/index';
 
 /**
@@ -13,7 +12,7 @@ import type { AccessibleResult } from '../types/index';
  */
 export class ZanzoClient {
   private permissions: Map<string, Set<string>>;
-  private snapshotCache: CompiledPermissions | null = null;
+  private snapshotCache: Record<string, string[]> | null = null;
 
   /**
    * Initializes the client with a strictly flat JSON representation of permissions.
@@ -22,7 +21,7 @@ export class ZanzoClient {
    *
    * @param compiledPermissions The Record<ResourceID, string[]> derived from `createZanzoSnapshot`
    */
-  constructor(compiledPermissions: CompiledPermissions) {
+  constructor(compiledPermissions: Record<string, string[]>) {
     // Issue #12: Deep-copy to prevent external mutation of the source object
     this.permissions = new Map(
       Object.entries(compiledPermissions).map(([key, actions]) => [
@@ -81,12 +80,12 @@ export class ZanzoClient {
    * Result is cached after first call to avoid re-serialization.
    * Useful for persisting it locally or dumping to Redux/Vuex inside Client apps.
    */
-  public getSnapshot(): CompiledPermissions {
+  public getSnapshot(): Record<string, string[]> {
     if (this.snapshotCache) {
       return this.snapshotCache;
     }
 
-    const result: CompiledPermissions = Object.create(null);
+    const result: Record<string, string[]> = Object.create(null);
     for (const [key, actions] of this.permissions) {
       result[key] = [...actions];
     }

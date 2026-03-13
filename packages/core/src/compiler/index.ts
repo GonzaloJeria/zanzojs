@@ -1,44 +1,57 @@
 import type { ZanzoEngine } from '../engine/index';
 import type { SchemaData } from '../builder/index';
+import { parseEntityRef } from '../ref/index';
 
 /**
- * A compiled, flat JSON representation of authorized actions for a given actor over specific resources.
- * Output Format: Record<ResourceID, string[]>
- * Example: { "Project:A": ["read", "write"] }
+ * Options for createZanzoSnapshot.
  */
-export type CompiledPermissions = Record<string, string[]>;
+export interface SnapshotOptions {
+  /**
+   * If provided, only resources of these entity types will be included
+   * in the snapshot. Reduces payload size for frontends that only need
+   * permissions for specific entity types.
+   *
+   * @example
+   * ```ts
+   * // Only include Document and Project permissions in the snapshot
+   * const snapshot = createZanzoSnapshot(engine, 'User:alice', {
+   *   entityTypes: ['Document', 'Project'],
+   * });
+   * ```
+   */
+  entityTypes?: string[];
+}
 
 /**
- * Compiles a flat JSON object containing all authorized actions a specific actor
- * can perform over every resource currently present in the engine's memory.
+ * Compiles a flat JSON snapshot mapping each resource to its allowed actions
+ * for a given actor. This snapshot is designed to be sent to the frontend
+ * for O(1) permission evaluation via ZanzoClient.
  *
- * This strips away all the relational ReBAC graph complexity, allowing lightweight
- * clients (Browsers, Mobile Apps, Edge workers) to do fast O(1) checks.
- *
- * @param engine The initialized ZanzoEngine containing the rules and graph memory
- * @param actor The subject entity string identifier (e.g., 'User:1')
- * @returns CompiledPermissions A flat JSON map answering "what can I do and where?"
+ * @param engine The ZanzoEngine instance with loaded tuples
+ * @param actor The actor to compile permissions for (e.g. 'User:alice')
+ * @param options Optional configuration (e.g. entityTypes filter)
+ * @returns Record<ResourceID, actionList> for instant O(1) client-side checks
  */
 export function createZanzoSnapshot<TSchema extends SchemaData>(
   engine: ZanzoEngine<TSchema>,
   actor: string,
-): CompiledPermissions {
-  const result: CompiledPermissions = Object.create(null);
+  options?: SnapshotOptions,
+): Record<string, string[]> {
+  const result: Record<string, string[]> = {};
   const index = engine.getIndex();
+  const filterTypes = options?.entityTypes ? new Set(options.entityTypes) : null;
 
-  // ZANZO-BACKLOG (Issue #2): Currently iterates only object keys from the index.
-  // Entities appearing exclusively as subjects are NOT evaluated.
-  // This is correct for the "what can actor do to targets?" use case,
-  // but the JSDoc should be refined if broader coverage is needed.
+  for (const [objectKey] of index) {
+    // Filter by entity type if specified
+    if (filterTypes) {
+      const entityType = parseEntityRef(objectKey).type;
+      if (!filterTypes.has(entityType)) continue;
+    }
 
-  // PERF-2 (Issue #6): Uses evaluateAllActions for single-traversal-per-resource
-  // instead of calling can() per action, eliminating redundant graph walks.
-  for (const resource of index.keys()) {
-    const allowedActions = engine.evaluateAllActions(actor, resource);
+    const allowedActions = engine.evaluateAllActions(actor, objectKey);
 
-    // Only map it if the user actually has at least 1 allowed action
     if (allowedActions.length > 0) {
-      result[resource] = allowedActions;
+      result[objectKey] = allowedActions;
     }
   }
 

@@ -1,6 +1,6 @@
 import { or, and, SQL, sql, AnyColumn } from 'drizzle-orm';
 import type { QueryAST, Condition, ZanzoEngine, SchemaData, ExtractSchemaResources, ExtractSchemaActions } from '@zanzojs/core';
-import { ENTITY_REF_SEPARATOR, RELATION_PATH_SEPARATOR } from '@zanzojs/core';
+import { ENTITY_REF_SEPARATOR, RELATION_PATH_SEPARATOR, ZanzoError, ZanzoErrorCode } from '@zanzojs/core';
 
 /**
  * Ensures the passed Drizzle Table conforms to the mandatory Zanzibar Universal Tuple Structure.
@@ -65,7 +65,7 @@ export function createZanzoAdapter<TSchema extends SchemaData, TTable extends Za
     // If a badly designed ReBAC schema generates a monstrous combinatorial AST tree, 
     // it could exceed max SQL text limits resulting in DB crashes. Abort safely.
     if (ast && ast.conditions.length > 100) {
-      throw new Error(`[Zanzo] Security Exception: The resulting AST exceeds the maximum safe limit of 100 conditional branches. Please optimize your schema or rely on pre-computed tuples to avoid database exhaustion.`);
+      throw new ZanzoError(ZanzoErrorCode.AST_OVERFLOW, `[Zanzo] Security Exception: The resulting AST exceeds the maximum safe limit of 100 conditional branches. Please optimize your schema or rely on pre-computed tuples to avoid database exhaustion.`);
     }
 
     if (!ast) {
