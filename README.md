@@ -130,6 +130,9 @@ export async function getMyDocuments(request: Request) {
 }
 ```
 
+> [!WARNING]
+> **EntityRef Concatenation Challenge:** Building a new adapter requires careful handling of SQL string concatenation to reconstruct the `Type:ID` format in `EXISTS` queries. Since dialects vary (e.g., `||` in Postgres/SQLite vs `CONCAT()` in MySQL), ensure your adapter is dialect-aware. Review the `@zanzojs/drizzle` implementation as a reference.
+
 ### Step 6: Power your Frontend with Snapshots (React)
 For the UI, you don't want to make an HTTP request every time a button renders. You take a "Server Snapshot" on page load, and send it to React.
 

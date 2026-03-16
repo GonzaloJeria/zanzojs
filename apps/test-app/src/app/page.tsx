@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, Suspense } from 'react';
 import { ZanzoProvider, useZanzo } from '@zanzojs/react';
+import { schema } from '@/lib/zanzo';
 
 // ─── CRUD Actions ────────────────────────────────────────────────────────
 const CRUD_ACTIONS = ['create', 'read', 'update', 'delete'] as const;
@@ -70,15 +71,15 @@ function ModuleCard({ moduleId, moduleName, icon, workspaceId, grantedActions }:
 // Runs INSIDE ZanzoProvider to access useZanzo()
 
 function WorkspaceModules({ workspaceId }: { workspaceId: string }) {
-    const { can } = useZanzo();
+    const { can } = useZanzo<typeof schema>();
 
     const moduleIds = ['facturacion', 'rrhh', 'reportes'];
 
     const accessibleModules = moduleIds
         .map((modId) => {
             const moduleRef = `Module:${workspaceId}_${modId}` as const;
-            // Check each CRUD action independently
-            const grantedActions = CRUD_ACTIONS.filter((action) => can(action, moduleRef as `${string}:${string}`));
+            // Check each CRUD action independently (O(1) in client)
+            const grantedActions = CRUD_ACTIONS.filter((action) => can(action, moduleRef as `Module:${string}`));
             return { modId, grantedActions };
         })
         // Only show modules where the user has at least 'read'
@@ -116,12 +117,98 @@ function WorkspaceModules({ workspaceId }: { workspaceId: string }) {
     );
 }
 
+// ─── Grant Access Component ─────────────────────────────────────────────
+
+function GrantAccess({ onGrant }: { onGrant: () => void }) {
+    const [targetUser, setTargetUser] = useState('bob');
+    const [targetResource, setTargetResource] = useState('Module:ws1_facturacion');
+    const [targetRole, setTargetRole] = useState('manager');
+    const [loading, setLoading] = useState(false);
+    const [result, setResult] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+    const handleGrant = async () => {
+        setLoading(true);
+        setResult(null);
+        try {
+            const res = await fetch('/api/grant', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    subject: `User:${targetUser}`,
+                    relation: targetRole,
+                    object: targetResource,
+                }),
+            });
+            const data = await res.json();
+            if (res.ok) {
+                setResult({ type: 'success', message: `¡Éxito! Se insertaron ${data.inserted} tuplas (base + derivadas).` });
+                onGrant();
+            } else {
+                setResult({ type: 'error', message: data.error || 'Error desconocido' });
+            }
+        } catch (err) {
+            setResult({ type: 'error', message: 'Error de red' });
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    return (
+        <div className="grant-panel">
+            <div className="grant-form">
+                <div className="form-group">
+                    <label className="form-label">Asignar a</label>
+                    <select className="form-input" value={targetUser} onChange={(e) => setTargetUser(e.target.value)}>
+                        {USERS.map(u => <option key={u.id} value={u.id}>{u.label}</option>)}
+                    </select>
+                </div>
+                <div className="form-group">
+                    <label className="form-label">Recurso (Materializable)</label>
+                    <select className="form-input" value={targetResource} onChange={(e) => setTargetResource(e.target.value)}>
+                        <optgroup label="Workspaces">
+                            {WORKSPACES.map(ws => <option key={ws.id} value={`Workspace:${ws.id}`}>{ws.name}</option>)}
+                        </optgroup>
+                        <optgroup label="Módulos (Directos)">
+                            {WORKSPACES.map(ws => 
+                                ['facturacion', 'rrhh', 'reportes'].map(m => (
+                                    <option key={`${ws.id}_${m}`} value={`Module:${ws.id}_${m}`}>
+                                        {ws.id} - {m}
+                                    </option>
+                                ))
+                            )}
+                        </optgroup>
+                    </select>
+                </div>
+                <div className="form-group">
+                    <label className="form-label">Rol / Relación</label>
+                    <select className="form-input" value={targetRole} onChange={(e) => setTargetRole(e.target.value)}>
+                        <option value="manager">Manager (Full CRUD)</option>
+                        <option value="contributor">Contributor (CRU)</option>
+                        <option value="editor">Editor (RU)</option>
+                        <option value="viewer">Viewer (R)</option>
+                        <option value="admin">Admin (Workspace level)</option>
+                    </select>
+                </div>
+                <button className="btn-primary" onClick={handleGrant} disabled={loading}>
+                    {loading ? 'Procesando...' : '🛡️ Otorgar Acceso'}
+                </button>
+            </div>
+            {result && (
+                <div className={`grant-result grant-result--${result.type}`}>
+                    {result.message}
+                </div>
+            )}
+        </div>
+    );
+}
+
 // ─── Main Page Component ─────────────────────────────────────────────────
 export default function HomePage() {
     const [selectedUser, setSelectedUser] = useState('alice');
     const [activeWorkspace, setActiveWorkspace] = useState('ws1');
     const [snapshot, setSnapshot] = useState<Record<string, string[]> | null>(null);
     const [loading, setLoading] = useState(true);
+    const [showGrant, setShowGrant] = useState(false);
 
     const fetchPermissions = useCallback(async (userId: string) => {
         setLoading(true);
@@ -214,6 +301,20 @@ export default function HomePage() {
                         </Suspense>
                     </ZanzoProvider>
                 ) : null}
+
+                {/* ─── Access Management Section ─── */}
+                <div className="access-header">
+                    <h2 className="access-header__title">
+                        <span className="access-header__icon">🛡️</span> Gestión de Accesos (Demo)
+                    </h2>
+                    <button className="btn-primary" onClick={() => setShowGrant(!showGrant)}>
+                        {showGrant ? 'Ocultar Panel' : 'Nuevo Permiso'}
+                    </button>
+                </div>
+
+                {showGrant && (
+                    <GrantAccess onGrant={() => fetchPermissions(selectedUser)} />
+                )}
             </main>
         </div>
     );

@@ -16,7 +16,7 @@
  */
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { expandTuples } from '@zanzojs/core';
+import { materializeDerivedTuples, deduplicateTuples } from '@zanzojs/core';
 import { engine } from '../src/lib/zanzo';
 import { zanzoTuples, workspaces, modules, workspaceModules } from '../src/db/schema';
 import { eq, and } from 'drizzle-orm';
@@ -112,13 +112,14 @@ async function seed() {
     object: 'Workspace:ws1',
   };
 
-  const aliceDerived = await expandTuples({
+  const aliceDerived = await materializeDerivedTuples({
     schema: engine.getSchema(),
     newTuple: aliceBaseTuple,
     fetchChildren,
   });
 
-  db.insert(zanzoTuples).values([aliceBaseTuple, ...aliceDerived]).run();
+  const uniqueAlice = deduplicateTuples([aliceBaseTuple, ...aliceDerived]);
+  db.insert(zanzoTuples).values(uniqueAlice).run();
   console.log(`\n✅ Alice: admin of Workspace:ws1 (base + ${aliceDerived.length} derived)`);
   for (const t of aliceDerived) {
     console.log(`   └─ ${t.subject} → ${t.relation} → ${t.object}`);
