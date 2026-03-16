@@ -19,7 +19,7 @@ Database (tuples)
 ## Installation
 
 ```bash
-pnpm add @zanzojs/core
+pnpm add @zanzojs/core@latest
 ```
 
 ## Production Flow (Start Here)
@@ -59,7 +59,7 @@ export const schema = new ZanzoBuilder()
   .build();
 ```
 
-**Key concept:** `folder.admin` is a nested permission path. It means "the admin of the folder that contains this document". This requires `expandTuples()` at write time — see `@zanzojs/drizzle`.
+**Key concept:** `folder.admin` is a nested permission path. It means "the admin of the folder that contains this document". This requires `materializeDerivedTuples()` at write time — see `@zanzojs/drizzle`.
 
 ### Step 2: Load tuples for the current user only
 
@@ -75,8 +75,14 @@ export async function getSnapshot(userId: string) {
     .from(zanzoTuples)
     .where(eq(zanzoTuples.subject, `User:${userId}`));
 
-  // Create a fresh engine per request — never reuse across requests
-  const engine = new ZanzoEngine(schema);
+  // Create an engine instance (optionally enabling the permission cache)
+  const engine = new ZanzoEngine(schema, {
+    cache: {
+      enabled: true,
+      invalidationType: 'selective', // 'selective' (default) or 'full'
+    }
+  });
+  
   engine.load(rows);
 
   // Compile a flat permission map for the frontend
@@ -109,7 +115,6 @@ async function getCachedSnapshot(userId: string) {
 
 // Invalidate when permissions change
 async function revokeAccess(subject: string, relation: string, object: string) {
-  await collapseTuples({ ... });
   await db.delete(zanzoTuples).where(...);
   await redis.del(`snapshot:${subject}`); // invalidate immediately
 }
@@ -129,17 +134,18 @@ The frontend consumes the snapshot via `@zanzojs/react`. See that package for de
 
 ---
 
-## Write Operations: expandTuples and collapseTuples
+## Write Operations: materializeDerivedTuples and removeDerivedTuples
 
 When you grant access via a nested permission path (e.g. `folder.admin`), you must materialize the derived tuples at write time. This is what makes read-time evaluation fast.
+
 ```typescript
-import { expandTuples, collapseTuples } from '@zanzojs/core';
+import { materializeDerivedTuples, removeDerivedTuples } from '@zanzojs/core';
 
 // GRANT — materialize derived tuples when writing to DB
 async function grantAccess(subject: string, relation: string, object: string) {
   const baseTuple = { subject, relation, object };
   
-  const derived = await expandTuples({
+  const derived = await materializeDerivedTuples({
     schema: engine.getSchema(),
     newTuple: baseTuple,
     fetchChildren: async (parentObject, relation) => {
@@ -154,14 +160,13 @@ async function grantAccess(subject: string, relation: string, object: string) {
   });
 
   await db.insert(zanzoTuples).values([baseTuple, ...derived]);
-  await redis.del(`snapshot:${subject}`); // invalidate cache
 }
 
 // REVOKE — remove derived tuples symmetrically
 async function revokeAccess(subject: string, relation: string, object: string) {
   const baseTuple = { subject, relation, object };
 
-  const derived = await collapseTuples({
+  const derived = await removeDerivedTuples({
     schema: engine.getSchema(),
     revokedTuple: baseTuple,
     fetchChildren: async (parentObject, relation) => {
@@ -182,9 +187,22 @@ async function revokeAccess(subject: string, relation: string, object: string) {
       eq(zanzoTuples.object, tuple.object),
     ));
   }
-  
-  await redis.del(`snapshot:${subject}`); // invalidate cache
 }
+```
+
+### Deferred Expansion (Performance Optimization)
+For extremely deep or complex graphs, use `deferred` mode to batch expansion work.
+```typescript
+const { expandedTuples, executePending } = await materializeDerivedTuples({
+  schema,
+  newTuple,
+  fetchChildren,
+  deferred: true // Don't run recursively yet
+});
+
+// Run with a timeout or AbortSignal
+const controller = new AbortSignal();
+await executePending({ signal: controller.signal });
 ```
 
 ---

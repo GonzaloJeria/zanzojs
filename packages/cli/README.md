@@ -6,13 +6,15 @@ The official CLI for ZanzoJS. Scaffolds your project with the correct boilerplat
 
 No installation needed:
 ```bash
-npx @zanzojs/cli init
+npx @zanzojs/cli@latest init    # Scaffold a new project
+npx @zanzojs/cli@latest check   # Lint and validate your schema
 ```
 
 Or install globally:
 ```bash
 pnpm add -g @zanzojs/cli
 zanzojs init
+zanzojs check
 ```
 
 ## What it generates

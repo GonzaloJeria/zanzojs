@@ -47,13 +47,13 @@ export interface CollapseContext {
  *   const conditions = buildBulkDeleteCondition(tuplesToDelete);
  *   
  *   // IMPORTANT: Execute bulk delete + base tuple delete in one transaction.
- *   // You must filter by all three columns (object, relation, subject) to avoid accidental deletions!
- *   for (const [obj, rel, sub] of conditions) {
+ *   // You must filter by all three columns (subject, relation, object) to avoid accidental deletions!
+ *   for (const [sub, rel, obj] of conditions) {
  *     await tx.delete(zanzoTuples).where(
  *       and(
- *         eq(zanzoTuples.object, obj),
+ *         eq(zanzoTuples.subject, sub),
  *         eq(zanzoTuples.relation, rel),
- *         eq(zanzoTuples.subject, sub)
+ *         eq(zanzoTuples.object, obj)
  *       )
  *     );
  *   }

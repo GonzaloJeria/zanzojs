@@ -16,7 +16,7 @@ Client: ZanzoProvider → useZanzo().can() → O(1) boolean
 ## Installation
 
 ```bash
-pnpm add @zanzojs/core @zanzojs/react
+pnpm add @zanzojs/core@latest @zanzojs/react@latest
 ```
 
 ## Step-by-Step Guide
@@ -76,16 +76,19 @@ export default function AppLayout({ children, snapshot }: AppLayoutProps) {
 }
 ```
 
-### 3. Check permissions in any client component
+### 3. Check permissions in any client component (Strictly Typed)
 ```tsx
 'use client';
 import { useZanzo } from '@zanzojs/react';
+import type { schema } from './zanzo.config'; // Import your schema type
 
 export function DocumentActions({ documentId }: { documentId: string }) {
-  const { can } = useZanzo();
+  // Pass your schema type for full autocompletado and type safety
+  const { can } = useZanzo<typeof schema>();
 
   return (
     <div>
+      {/* TypeScript will error if 'read' or 'Document' are misspelled */}
       {can('read', `Document:${documentId}`) && <ReadButton />}
       {can('write', `Document:${documentId}`) && <EditButton />}
       {can('delete', `Document:${documentId}`) && <DeleteButton />}
@@ -94,15 +97,19 @@ export function DocumentActions({ documentId }: { documentId: string }) {
 }
 ```
 
+> [!TIP]
+> **Strict Type Safety**: As of v0.3.0, `useZanzo` supports generics. By passing your schema type, TypeScript will validate that the actions and resource types you check exist in your model.
+
 ### 4. List accessible resources (O(n))
 ```tsx
 'use client';
 import { useZanzo } from '@zanzojs/react';
+import type { schema } from './zanzo.config';
 
 export function DocumentList() {
-  const { listAccessible } = useZanzo();
+  const { listAccessible } = useZanzo<typeof schema>();
 
-  // O(n) — iterates the snapshot. Use for rendering lists, not in tight loops.
+  // O(n) — iterates the snapshot.
   const docs = listAccessible('Document');
 
   return (
@@ -119,7 +126,13 @@ export function DocumentList() {
 
 > **`can()` is O(1). `listAccessible()` is O(n).** Use `can()` for individual checks inside render loops. Use `listAccessible()` to build lists of accessible resources.
 
-## Keeping the snapshot fresh
+## Best Practices & Security
+
+### Client-side Security Warning
+> [!WARNING]
+> **UX Only**: Client-side permission checks are purely for UI/UX purposes (e.g., hiding a button). Since snapshots are sent to the browser, they can be manipulated by a malicious user. **Always** perform a secondary authorization check on the server-side before executing any sensitive operation.
+
+### Keeping the snapshot fresh
 
 The snapshot reflects permissions at the time it was compiled. If permissions change after compilation, the client snapshot becomes stale.
 

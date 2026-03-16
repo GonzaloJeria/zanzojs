@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
-import { createZanzoAdapter, ZanzoTupleTable } from '../src/index';
+import { createZanzoAdapter } from '../src/index.js';
 import { ZanzoBuilder, ZanzoEngine } from '@zanzojs/core';
 import { SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
 

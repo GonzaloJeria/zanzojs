@@ -170,6 +170,7 @@ export class GrantBuilder<TSchema extends SchemaData> {
   ) {}
 
   to<TSubject extends SchemaEntityRef<TSchema> & string>(subject: TSubject): GrantToBuilder<TSchema> {
+    (this.engine as any).validateInput(subject, 'subject');
     return new GrantToBuilder(this.engine, this.relation, subject);
   }
 }
@@ -204,13 +205,14 @@ export class GrantOnBuilder<TSchema extends SchemaData> {
 
   /**
    * Sets an expiration date on the granted tuple.
-   * The tuple is re-stored with the `expiresAt` field set.
+   * Uses atomic metadata update — the tuple is never removed from the index.
    */
   until(date: Date): void {
-    // Remove the previously added tuple without expiration and re-add with expiresAt
-    this.engine.removeTuple(this.tuple);
+    // Atomically update the expiration without removing the tuple from the index.
+    // This eliminates the race condition where a concurrent can() would see the tuple
+    // as missing between removeTuple and addTuple.
+    this.engine.updateTupleExpiration(this.tuple, date);
     this.tuple.expiresAt = date;
-    this.engine.addTuple(this.tuple);
   }
 }
 
@@ -234,6 +236,7 @@ export class RevokeBuilder<TSchema extends SchemaData> {
   ) {}
 
   from<TSubject extends SchemaEntityRef<TSchema> & string>(subject: TSubject): RevokeFromBuilder<TSchema> {
+    (this.engine as any).validateInput(subject, 'subject');
     return new RevokeFromBuilder(this.engine, this.relation, subject);
   }
 }

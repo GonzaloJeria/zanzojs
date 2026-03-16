@@ -76,9 +76,9 @@ function WorkspaceModules({ workspaceId }: { workspaceId: string }) {
 
     const accessibleModules = moduleIds
         .map((modId) => {
-            const moduleRef = `Module:${workspaceId}_${modId}`;
+            const moduleRef = `Module:${workspaceId}_${modId}` as const;
             // Check each CRUD action independently
-            const grantedActions = CRUD_ACTIONS.filter((action) => can(action, moduleRef));
+            const grantedActions = CRUD_ACTIONS.filter((action) => can(action, moduleRef as `${string}:${string}`));
             return { modId, grantedActions };
         })
         // Only show modules where the user has at least 'read'

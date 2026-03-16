@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { sqliteTable, text, integer } from 'drizzle-orm/sqlite-core';
-import { createZanzoAdapter } from '../src/index';
+import { createZanzoAdapter } from '../src/index.js';
 import { ZanzoBuilder, ZanzoEngine } from '@zanzojs/core';
 import { SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
 
@@ -47,10 +47,10 @@ describe('Audit 3: Drizzle Adapter Efficiency', () => {
 
     const { sql: rawSql, params } = dialect.sqlToQuery(sqlFilter as any);
 
-    // VERIFICATION: The adapter MUST generate EXISTS subqueries.
-    // It should NOT require loading all documents into memory.
+    // VERIFICATION: The adapter MUST generate an optimized EXISTS subquery
     expect(rawSql).toContain('EXISTS');
-    expect(rawSql).toContain('"zanzo_tuples"."relation" = ?');
+    expect(rawSql).toContain('CONCAT(?, ?, "documents"."id")');
+    expect(rawSql).toContain('"zanzo_tuples"."relation" IN (?, ?)');
     
     // It should find both paths
     expect(params).toContain('owner');

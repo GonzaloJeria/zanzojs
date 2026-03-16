@@ -37,10 +37,12 @@ export const ZanzoErrorCode = {
   MISSING_RELATION: 'ZANZO_MISSING_RELATION',
   /**
    * Circular reference detected during tuple expansion.
-   * The same object+relation pair was re-encountered during graph traversal,
+   * The same object+relation pair was re-encounterd during graph traversal,
    * indicating a cycle in the schema or data (e.g. A→B→A).
    */
   CYCLE_DETECTED: 'ZANZO_CYCLE_DETECTED',
+  /** Tuple expansion was aborted via AbortSignal timeout */
+  EXPANSION_ABORTED: 'ZANZO_EXPANSION_ABORTED',
 } as const;
 
 export type ZanzoErrorCodeValue = typeof ZanzoErrorCode[keyof typeof ZanzoErrorCode];

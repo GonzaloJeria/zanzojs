@@ -1,6 +1,6 @@
 {
   "name": "@zanzojs/cli",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "CLI for scaffolding ZanzoJS in your project",
   "keywords": [
     "zanzojs",
@@ -32,19 +32,22 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
-    "test": "echo 'no tests yet'"
+    "test": "vitest run"
   },
   "dependencies": {
     "@clack/prompts": "^0.7.0",
+    "jiti": "^2.6.1",
     "picocolors": "^1.0.0"
   },
   "peerDependencies": {
-    "@zanzojs/core": "^0.2.0"
+    "@zanzojs/core": "^0.3.0"
   },
   "devDependencies": {
     "@types/node": "^20.19.35",
+    "@vitest/coverage-v8": "^4.1.0",
     "tsup": "^8.3.5",
-    "typescript": "catalog:"
+    "typescript": "catalog:",
+    "vitest": "^4.1.0"
   },
   "engines": {
     "node": ">=18"

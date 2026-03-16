@@ -9,11 +9,15 @@ The official Drizzle ORM adapter for ZanzoJS.
 
 `@zanzojs/drizzle` serves two distinct purposes:
 
-**1. Write-time tuple materialization** (`expandTuples` / `collapseTuples`)
+**1. Write-time tuple materialization** (`materializeDerivedTuples` / `removeDerivedTuples`)
 When you grant or revoke access via nested permission paths (e.g. `folder.admin`), you must pre-materialize the derived tuples in the database. This is what makes read-time evaluation fast.
 
 **2. SQL-filtered queries for large datasets**
 When you need to fetch a filtered list of resources (e.g. "all documents this user can read") and the dataset is too large to load entirely into memory, the adapter generates parameterized `EXISTS` subqueries that push the permission filter directly to the database.
+
+> [!TIP]
+> **Performance Optimized**: As of v0.3.0, the adapter automatically groups multiple permission paths into a single `EXISTS` subquery using an `IN` clause, providing significant performance gains for complex schemas.
+
 ```typescript
 // Without adapter — loads everything into memory and filters (inefficient for large datasets)
 const allDocs = await db.select().from(documents);
@@ -29,7 +33,7 @@ const myDocs = await db.select().from(documents)
 ## Installation
 
 ```bash
-pnpm add @zanzojs/core @zanzojs/drizzle drizzle-orm
+pnpm add @zanzojs/core@latest @zanzojs/drizzle@latest drizzle-orm
 ```
 
 ## Setup
@@ -66,13 +70,34 @@ async function getReadableDocuments(userId: string) {
 }
 ```
 
+## Configuration Options
+
+`createZanzoAdapter` accepts an optional `options` object:
+
+```typescript
+export const withPermissions = createZanzoAdapter(engine, zanzoTuples, {
+  dialect: 'postgres', // 'postgres' (default), 'mysql', or 'sqlite'
+  debug: false,       // Set to true to log generated SQL and AST
+  warnOnNestedConditions: true // Warns if materialized tuples are missing
+});
+```
+
+### 1. SQL Injection Prevention
+As of v0.3.0, the adapter avoids `sql.raw` for all resource identifiers. All inputs are handled via Drizzle's secure parameter binding.
+
+### 2. Dialect Support
+The adapter is dialect-aware. If you use SQLite, specify `{ dialect: 'sqlite' }` to use the `||` operator for string concatenation instead of `CONCAT`.
+
+### 3. AST Caching
+The adapter includes internal caching of structural permission trees (ASTs), minimizing CPU overhead for repeated queries on the same resource types.
+
 ## Write Operations
 
-### Granting access with expandTuples
+### Granting access with materializeDerivedTuples
 
-When assigning a role that involves nested permission paths, use `expandTuples` to materialize all derived tuples atomically.
+When assigning a role that involves nested permission paths, use `materializeDerivedTuples` to materialize all derived tuples atomically.
 ```typescript
-import { expandTuples } from '@zanzojs/core';
+import { materializeDerivedTuples } from '@zanzojs/core';
 
 async function grantAccess(userId: string, relation: string, objectId: string) {
   const baseTuple = {
@@ -81,7 +106,7 @@ async function grantAccess(userId: string, relation: string, objectId: string) {
     object: objectId,
   };
 
-  const derived = await expandTuples({
+  const derived = await materializeDerivedTuples({
     schema: engine.getSchema(),
     newTuple: baseTuple,
     fetchChildren: async (parentObject, relation) => {
@@ -99,11 +124,11 @@ async function grantAccess(userId: string, relation: string, objectId: string) {
 }
 ```
 
-### Revoking access with collapseTuples
+### Revoking access with removeDerivedTuples
 
-`collapseTuples` is the symmetric inverse of `expandTuples`. It identifies all derived tuples to delete.
+`removeDerivedTuples` is the symmetric inverse of `materializeDerivedTuples`. It identifies all derived tuples to delete.
 ```typescript
-import { collapseTuples } from '@zanzojs/core';
+import { removeDerivedTuples } from '@zanzojs/core';
 
 async function revokeAccess(userId: string, relation: string, objectId: string) {
   const baseTuple = {
@@ -112,7 +137,7 @@ async function revokeAccess(userId: string, relation: string, objectId: string) 
     object: objectId,
   };
 
-  const derived = await collapseTuples({
+  const derived = await removeDerivedTuples({
     schema: engine.getSchema(),
     revokedTuple: baseTuple,
     fetchChildren: async (parentObject, relation) => {
@@ -136,7 +161,7 @@ async function revokeAccess(userId: string, relation: string, objectId: string) 
 }
 ```
 
-> **expandTuples and collapseTuples are symmetric.** If `expandTuples` derived a tuple, `collapseTuples` will identify it for deletion. This guarantees no orphaned tuples.
+> **materializeDerivedTuples and removeDerivedTuples are symmetric.** If `materializeDerivedTuples` derived a tuple, `removeDerivedTuples` will identify it for deletion. This guarantees no orphaned tuples.
 
 ## Documentation
 For full architecture details, see the [ZanzoJS Monorepo](https://github.com/GonzaloJeria/zanzo).

@@ -15,6 +15,13 @@ export interface CacheOptions {
    * @default 5000
    */
   ttlMs?: number;
+  /**
+   * Cache invalidation strategy when tuples are mutated.
+   * - 'selective': Only invalidates cache entries that are transitively affected by the mutation.
+   * - 'full': Clears the entire cache on any tuple mutation (v0.3.0 strict deterministic behavior).
+   * @default 'selective'
+   */
+  invalidationType?: 'selective' | 'full';
 }
 
 interface CacheEntry {
@@ -25,9 +32,11 @@ interface CacheEntry {
 export class PermissionCache {
   private cache = new Map<string, CacheEntry>();
   private ttlMs: number;
+  private invalidationType: 'selective' | 'full';
 
   constructor(options: CacheOptions = {}) {
     this.ttlMs = options.ttlMs ?? 5000;
+    this.invalidationType = options.invalidationType ?? 'selective';
   }
 
   /**
@@ -60,9 +69,47 @@ export class PermissionCache {
     });
   }
 
-  /** Clears all cached entries. Called on any tuple mutation. */
-  invalidate(): void {
-    this.cache.clear();
+  /** 
+   * Invalidates cached entries based on the invalidation strategy.
+   * If 'selective', removes only paths that are transitively affected using the provided reachable callback.
+   * If 'full' or no tuple provided, clears the whole cache.
+   */
+  invalidate(
+    mutatedTuple?: { subject: string; object: string },
+    isReachable?: (start: string, target: string) => boolean
+  ): void {
+    if (this.invalidationType === 'full' || !mutatedTuple || !isReachable) {
+      this.cache.clear();
+      return;
+    }
+
+    const { subject: mutatedSubject, object: mutatedObject } = mutatedTuple;
+
+    for (const key of this.cache.keys()) {
+      const parts = key.split('|');
+      const cachedActor = parts[0];
+      const cachedResource = parts[2];
+
+      if (!cachedActor || !cachedResource) continue;
+
+      // 1. Direct relation match
+      if (cachedActor === mutatedSubject || cachedResource === mutatedObject) {
+        this.cache.delete(key);
+        continue;
+      }
+
+      // 2. Descendencia: Cached resource descends from mutated object
+      if (isReachable(cachedResource, mutatedObject)) {
+        this.cache.delete(key);
+        continue;
+      }
+
+      // 3. Ascendencia: Cached actor descends from mutated subject
+      if (isReachable(cachedActor, mutatedSubject)) {
+        this.cache.delete(key);
+        continue;
+      }
+    }
   }
 
   /** Returns the current number of cached entries (for testing). */

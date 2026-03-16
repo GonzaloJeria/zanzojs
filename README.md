@@ -33,7 +33,7 @@ To really understand Zanzo, let's walk through the actual lifecycle of securing 
 
 ### Step 1: Install the setup
 ```bash
-pnpm add @zanzojs/core @zanzojs/drizzle @zanzojs/react
+pnpm add @zanzojs/core@latest @zanzojs/drizzle@latest @zanzojs/react@latest
 pnpm add drizzle-orm # (Peer dependency)
 ```
 
@@ -87,16 +87,16 @@ export const documents = sqliteTable('documents', {
 });
 ```
 
-Whenever a user creates a resource or joins a team, you just insert a Tuple. But since Zanzo uses **Query Pushdown** to make reads blazing fast in SQL, nested relationships (like `workspace.owner` -> `Document.edit`) must be pre-calculated during the write operation using `expandTuples()` and removed using `collapseTuples()`.
+Whenever a user creates a resource or joins a team, you just insert a Tuple. But since Zanzo uses **Query Pushdown** to make reads blazing fast in SQL, nested relationships (like `workspace.owner` -> `Document.edit`) must be pre-calculated during the write operation using `materializeDerivedTuples()` and removed using `removeDerivedTuples()`.
 
 ```typescript
-import { expandTuples } from '@zanzojs/core';
+import { materializeDerivedTuples } from '@zanzojs/core';
 
 async function assignWorkspaceAdmin(workspaceId: string, userId: string) {
   const baseTuple = { subject: `User:${userId}`, relation: 'admin', object: `Workspace:${workspaceId}` };
 
   // Calculate nested dependencies automatically
-  const derived = await expandTuples({
+  const { expandedTuples } = await materializeDerivedTuples({
     schema: engine.getSchema(),
     newTuple: baseTuple,
     fetchChildren: async (parentObj, relation) => {
@@ -107,7 +107,7 @@ async function assignWorkspaceAdmin(workspaceId: string, userId: string) {
   });
 
   // Save the base tuple and all its nested implications atomically!
-  await db.insert(zanzoTuples).values([baseTuple, ...derived]);
+  await db.insert(zanzoTuples).values([baseTuple, ...expandedTuples]);
 }
 ```
 
@@ -152,9 +152,10 @@ const flatSnapshot = createZanzoSnapshot(requestEngine, `User:${userId}`);
 ```tsx
 'use client';
 import { useZanzo } from '@zanzojs/react';
+import type { schema } from './zanzo.config';
 
 function EditButton({ docId }) {
-  const { can } = useZanzo();
+  const { can } = useZanzo<typeof schema>();
 
   // Instant dictionary lookup! 0 latency. 0 network requests.
   if (!can('edit', `Document:${docId}`)) {
@@ -236,18 +237,18 @@ const unique = deduplicateTuples([...baseTuples, ...derived]);
 await db.insert(zanzoTuples).values(unique).onConflictDoNothing();
 
 // Bulk delete with buildBulkDeleteCondition
-// WARNING: You must filter by all three columns (object, relation, subject) inside a transaction.
+// WARNING: You must filter by all three columns (subject, relation, object) inside a transaction.
 // Filtering only by `object` will accidentally delete other subjects' tuples!
 const toDelete = await removeDerivedTuples({ /* ... */ });
 const conditions = buildBulkDeleteCondition(toDelete);
 
 await db.transaction(async (tx) => {
-  for (const [obj, rel, sub] of conditions) {
+  for (const [sub, rel, obj] of conditions) {
     await tx.delete(zanzoTuples).where(
       and(
-        eq(zanzoTuples.object, obj),
+        eq(zanzoTuples.subject, sub),
         eq(zanzoTuples.relation, rel),
-        eq(zanzoTuples.subject, sub)
+        eq(zanzoTuples.object, obj)
       )
     );
   }

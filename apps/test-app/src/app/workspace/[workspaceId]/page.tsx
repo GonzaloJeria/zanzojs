@@ -64,8 +64,8 @@ function WorkspaceModules({ workspaceId }: { workspaceId: string }) {
 
     const accessibleModules = moduleIds
         .map((modId) => {
-            const moduleRef = `Module:${workspaceId}_${modId}`;
-            const grantedActions = CRUD_ACTIONS.filter((action) => can(action, moduleRef));
+            const moduleRef = `Module:${workspaceId}_${modId}` as const;
+            const grantedActions = CRUD_ACTIONS.filter((action) => can(action, moduleRef as `${string}:${string}`));
             return { modId, grantedActions };
         })
         .filter(({ grantedActions }) => grantedActions.includes('read'));

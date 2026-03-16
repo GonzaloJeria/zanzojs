@@ -90,16 +90,55 @@ describe('ZANZO_MISSING_RELATION — Schema Validation', () => {
 });
 
 describe('ZANZO_CYCLE_DETECTED — Expansion Cycle Detection', () => {
-  it('detects a circular reference during tuple expansion', async () => {
-    // Schema: Folder has parent:Folder and permissions: parent.viewer
-    // This creates an actual cycle when Folder A is parent of Folder B, and B is parent of A
+  it('processes equal-relation diamond graphs successfully without throwing CYCLE_DETECTED', async () => {
+    // Schema: Folder has parent:Folder and permissions up to 3 levels deep
+    // Diamond graph: multiple paths reach the same child via the exact same derived relation.
+    const schema = new ZanzoBuilder()
+      .entity('User', { actions: [], relations: {} })
+      .entity('Folder', {
+        actions: ['view'],
+        relations: { viewer: 'User', parent: 'Folder' },
+        permissions: {
+          view: ['viewer', 'parent.viewer', 'parent.parent.viewer'],
+        },
+      })
+      .build();
+
+    const baseTuple = {
+      subject: 'User:alice',
+      relation: 'viewer',
+      object: 'Folder:A',
+    };
+
+    const results = await materializeDerivedTuples({
+      schema,
+      newTuple: baseTuple,
+      fetchChildren: async (parentObj) => {
+        // Equal-relation diamond graph: A -> X, Y. X,Y -> B.
+        // Both `Folder:X` and `Folder:Y` will enqueue `Folder:B`.
+        // The engine should deduplicate `Folder:B` silently without throwing a cycle error.
+        if (parentObj === 'Folder:A') return ['Folder:X', 'Folder:Y'];
+        if (parentObj === 'Folder:X') return ['Folder:B'];
+        if (parentObj === 'Folder:Y') return ['Folder:B'];
+        return [];
+      },
+    });
+
+    // Should return tuples for Folder:X, Folder:Y, and exactly one for Folder:B
+    expect(results.length).toBeGreaterThan(0);
+    const bTuples = results.filter(r => r.object === 'Folder:B');
+    expect(bTuples.length).toBe(1); // Deduplicated!
+  });
+
+  it('detects a TRUE circular reference (A -> B -> A) during tuple expansion', async () => {
+    // True cycle: A node appears in its own ancestry chain.
     const cyclicSchema = new ZanzoBuilder()
       .entity('User', { actions: [], relations: {} })
       .entity('Folder', {
         actions: ['view'],
         relations: { viewer: 'User', parent: 'Folder' },
         permissions: {
-          view: ['viewer', 'parent.viewer'],
+          view: ['viewer', 'parent.viewer', 'parent.parent.viewer', 'parent.parent.parent.viewer'],
         },
       })
       .build();
@@ -114,10 +153,11 @@ describe('ZANZO_CYCLE_DETECTED — Expansion Cycle Detection', () => {
       await materializeDerivedTuples({
         schema: cyclicSchema,
         newTuple: baseTuple,
-        fetchChildren: async (parentObj, _relation) => {
-          // fetchChildren returns the SAME object that's already the initial tuple's object
-          // This simulates a Folder whose parent is itself → instant cycle
-          if (parentObj === 'Folder:A') return ['Folder:A']; // self-referential → cycle
+        fetchChildren: async (parentObj) => {
+          // True cycle: A -> B -> C -> A
+          if (parentObj === 'Folder:A') return ['Folder:B'];
+          if (parentObj === 'Folder:B') return ['Folder:C'];
+          if (parentObj === 'Folder:C') return ['Folder:A']; // ← object is an ancestor of itself
           return [];
         },
       });
@@ -127,6 +167,7 @@ describe('ZANZO_CYCLE_DETECTED — Expansion Cycle Detection', () => {
       expect((e as ZanzoError).code).toBe(ZanzoErrorCode.CYCLE_DETECTED);
       expect((e as ZanzoError).message).toContain('Circular reference');
       expect((e as ZanzoError).message).toContain('Folder:A');
+      expect((e as ZanzoError).message).toContain('ancestry chain');
     }
   });
 
@@ -162,5 +203,28 @@ describe('ZANZO_CYCLE_DETECTED — Expansion Cycle Detection', () => {
     });
 
     expect(result.length).toBe(2);
+  });
+});
+
+describe('ZANZO_INVALID_ENTITY_REF — Entity Format Validation', () => {
+  it('throws ZANZO_INVALID_ENTITY_REF when actor or subject/object is not Type:Id format', () => {
+    const validSchema = new ZanzoBuilder()
+      .entity('User', { actions: [], relations: {} })
+      .entity('Document', { actions: ['read'], relations: { viewer: 'User' }, permissions: { read: ['viewer'] } })
+      .build();
+
+    const engine = new ZanzoEngine(validSchema);
+
+    // Test for()
+    expect(() => engine.for('invalid' as any)).toThrowError(ZanzoError);
+    expect(() => engine.for('invalid' as any)).toThrowError(/Type:Id/);
+    expect(() => engine.for(':' as any)).toThrowError(ZanzoError);
+    expect(() => engine.for('User:' as any)).toThrowError(ZanzoError);
+
+    try {
+      engine.for('invalid' as any);
+    } catch (e: any) {
+      expect(e.code).toBe(ZanzoErrorCode.INVALID_ENTITY_REF);
+    }
   });
 });

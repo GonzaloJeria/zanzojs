@@ -60,9 +60,15 @@ export class ZanzoEngine<TSchema extends SchemaData> {
   // Map<ObjectIdentifier, Map<Relation, Set<SubjectIdentifier>>>
   private index = new Map<string, Map<string, Set<string>>>();
   // Parallel store for tuple metadata (expiration)
-  private tupleStore: StoredTuple[] = [];
+  private tupleStore = new Map<string, StoredTuple>();
+  // O(1) expiration lookup
+  private expiryIndex = new Map<string, Date>();
   // Optional permission cache with TTL
   private cache: PermissionCache | null = null;
+
+  private uniqueTupleKey(subject: string, relation: string, object: string): string {
+    return `${subject}|${relation}|${object}`;
+  }
 
   constructor(schema: Readonly<TSchema>) {
     this.schema = schema;
@@ -107,6 +113,11 @@ export class ZanzoEngine<TSchema extends SchemaData> {
    * Subsequent `can()` calls will be cached with the specified TTL.
    * Cache is automatically invalidated when tuples change.
    *
+   * @note The default `invalidationType: 'selective'` is backwards-compatible and optimizes cache
+   * clearing by ensuring security is never broken while retaining unaffected entries.
+   * If you need to reproduce the strict deterministic full-clear behavior of v0.3.0,
+   * pass `invalidationType: 'full'`.
+   *
    * @example
    * ```ts
    * engine.enableCache({ ttlMs: 5000 });
@@ -123,6 +134,33 @@ export class ZanzoEngine<TSchema extends SchemaData> {
    */
   public disableCache(): void {
     this.cache = null;
+  }
+
+  /**
+   * Performs a bounded DFS on the engine's internal index to determine if there is a
+   * dependency path from `start` to `target`.
+   * The index stores edges as: Object -> Relation -> Subjects.
+   * This means traversing the index goes from a resource to its owners/parents.
+   */
+  private isReachable(start: string, target: string, depth = 0, visited = new Set<string>()): boolean {
+    if (start === target) return true;
+    if (depth > 50) return false;
+
+    if (visited.has(start)) return false;
+    visited.add(start);
+
+    const targetRelationsIndex = this.index.get(start);
+    if (!targetRelationsIndex) return false;
+
+    for (const subjectsSet of targetRelationsIndex.values()) {
+      for (const subject of subjectsSet) {
+        if (this.isReachable(subject, target, depth + 1, visited)) {
+          return true;
+        }
+      }
+    }
+
+    return false;
   }
 
   /**
@@ -152,6 +190,19 @@ export class ZanzoEngine<TSchema extends SchemaData> {
     if (controlCharsRegex.test(input)) {
       throw new ZanzoError(ZanzoErrorCode.INVALID_INPUT, `[Zanzo] Security Exception: ${label} input contains illegal unprintable control characters.`);
     }
+
+    // The pipe character is used as the internal separator for cache keys and tuple keys.
+    // Allowing it in inputs would break cache key parsing in invalidate() and cause stale access.
+    if (input.includes('|')) {
+      throw new ZanzoError(ZanzoErrorCode.INVALID_INPUT, `[Zanzo] Invalid ${label} input: the character '|' is reserved as an internal separator and cannot appear in identifiers.`);
+    }
+
+    if (label === 'actor' || label === 'subject' || label === 'object' || label === 'resource') {
+      const parts = input.split(':');
+      if (parts.length !== 2 || parts[0] === '' || parts[1] === '') {
+        throw new ZanzoError(ZanzoErrorCode.INVALID_ENTITY_REF, `[Zanzo] Invalid ${label}: "${input}" must follow the "Type:Id" format.`);
+      }
+    }
   }
 
   /**
@@ -178,6 +229,7 @@ export class ZanzoEngine<TSchema extends SchemaData> {
    * engine.for('User:alice').listAccessible('Document')
    */
   public for<TActor extends SchemaEntityRef<TSchema> & string>(actor: TActor): ForBuilder<TSchema> {
+    this.validateInput(actor, 'actor');
     return new ForBuilder(this, actor);
   }
 
@@ -189,6 +241,7 @@ export class ZanzoEngine<TSchema extends SchemaData> {
    * engine.grant('viewer').to('User:bob').on('Document:doc1').until(new Date())
    */
   public grant<TRelation extends AllSchemaRelations<TSchema> & string>(relation: TRelation): GrantBuilder<TSchema> {
+    this.validateInput(relation, 'relation');
     return new GrantBuilder(this, relation);
   }
 
@@ -199,6 +252,7 @@ export class ZanzoEngine<TSchema extends SchemaData> {
    * engine.revoke('owner').from('User:alice').on('Document:doc1')
    */
   public revoke<TRelation extends AllSchemaRelations<TSchema> & string>(relation: TRelation): RevokeBuilder<TSchema> {
+    this.validateInput(relation, 'relation');
     return new RevokeBuilder(this, relation);
   }
 
@@ -211,7 +265,7 @@ export class ZanzoEngine<TSchema extends SchemaData> {
    * @deprecated Use `engine.grant(relation).to(subject).on(object)` instead.
    * Will be removed in v1.0.0.
    */
-  public addTuple(tuple: RelationTuple | Tuple): void {
+  public addTuple(tuple: RelationTuple | Tuple, skipCacheInvalidation: boolean = false): void {
     this.validateInput(tuple.subject, 'subject');
     this.validateInput(tuple.object, 'object');
     this.validateInput(tuple.relation, 'relation');
@@ -240,10 +294,17 @@ export class ZanzoEngine<TSchema extends SchemaData> {
     };
     if ('expiresAt' in tuple && tuple.expiresAt) {
       storedTuple.expiresAt = tuple.expiresAt;
+      this.expiryIndex.set(this.uniqueTupleKey(tuple.subject, tuple.relation, tuple.object), tuple.expiresAt);
+    } else {
+      this.expiryIndex.delete(this.uniqueTupleKey(tuple.subject, tuple.relation, tuple.object));
     }
-    this.tupleStore.push(storedTuple);
-    // Invalidate cache on any tuple mutation
-    this.cache?.invalidate();
+
+    this.tupleStore.set(this.uniqueTupleKey(tuple.subject, tuple.relation, tuple.object), storedTuple);
+
+    // Invalidate cache on any tuple mutation unless skipped for bulk processing
+    if (!skipCacheInvalidation) {
+      this.cache?.invalidate(tuple as RelationTuple, (start, target) => this.isReachable(start, target));
+    }
   }
 
   /**
@@ -253,8 +314,13 @@ export class ZanzoEngine<TSchema extends SchemaData> {
    * Will be removed in v1.0.0.
    */
   public addTuples(tuples: (RelationTuple | Tuple)[]): void {
+    const isLargeBatch = tuples.length > 50;
     for (const tuple of tuples) {
-      this.addTuple(tuple);
+      this.addTuple(tuple, isLargeBatch);
+    }
+    // For large loads, do an O(1) bulk clear at the end instead of N independent DFS operations
+    if (isLargeBatch && tuples.length > 0) {
+      this.cache?.invalidate();
     }
   }
 
@@ -274,11 +340,22 @@ export class ZanzoEngine<TSchema extends SchemaData> {
    */
   public load(tuples: (RelationTuple | Tuple)[]): void {
     const now = new Date();
+    // Optimization: When loading a large batch (> 50 tuples natively), bypass the selective 
+    // depth-first-search (DFS) per tuple and instead execute an instant full cache wipe at the end. 
+    // This scales hydration logic linearly avoiding O(N * (Graph DFS)) spikes.
+    const isLargeBatch = tuples.length > 50; 
+    let loadedCount = 0;
+
     for (const tuple of tuples) {
       if ('expiresAt' in tuple && tuple.expiresAt && tuple.expiresAt <= now) {
         continue; // Silently skip expired tuples during hydration
       }
-      this.addTuple(tuple);
+      this.addTuple(tuple, isLargeBatch);
+      loadedCount++;
+    }
+
+    if (isLargeBatch && loadedCount > 0) {
+      this.cache?.invalidate();
     }
   }
 
@@ -301,15 +378,36 @@ export class ZanzoEngine<TSchema extends SchemaData> {
       }
     }
 
-    // Remove from tuple store
-    const idx = this.tupleStore.findIndex(
-      (t) => t.subject === tuple.subject && t.relation === tuple.relation && t.object === tuple.object
-    );
-    if (idx !== -1) {
-      this.tupleStore.splice(idx, 1);
-    }
+    // Remove from tuple store and expiry index
+    const key = this.uniqueTupleKey(tuple.subject, tuple.relation, tuple.object);
+    this.tupleStore.delete(key);
+    this.expiryIndex.delete(key);
+
     // Invalidate cache on any tuple mutation
-    this.cache?.invalidate();
+    this.cache?.invalidate(tuple as RelationTuple, (start, target) => this.isReachable(start, target));
+  }
+
+  /**
+   * Atomically updates the expiration metadata of an existing tuple
+   * WITHOUT removing it from the index. This prevents the race condition
+   * that occurs with removeTuple+addTuple where the tuple briefly doesn't exist.
+   * @internal Used by GrantOnBuilder.until()
+   */
+  public updateTupleExpiration(tuple: RelationTuple | Tuple, expiresAt: Date): void {
+    const key = this.uniqueTupleKey(tuple.subject, tuple.relation, tuple.object);
+    const stored = this.tupleStore.get(key);
+
+    if (stored) {
+      // Update metadata in-place — the tuple stays in the index the entire time
+      stored.expiresAt = expiresAt;
+      this.expiryIndex.set(key, expiresAt);
+      // Invalidate cache once (not twice like remove+add would)
+      this.cache?.invalidate(tuple as RelationTuple, (start, target) => this.isReachable(start, target));
+    } else {
+      // Tuple wasn't in the store yet — do a full add with expiresAt
+      const tupleWithExpiry = { ...tuple, expiresAt };
+      this.addTuple(tupleWithExpiry);
+    }
   }
 
   /**
@@ -317,7 +415,8 @@ export class ZanzoEngine<TSchema extends SchemaData> {
    */
   public clearTuples(): void {
     this.index.clear();
-    this.tupleStore = [];
+    this.tupleStore.clear();
+    this.expiryIndex.clear();
     this.cache?.invalidate();
   }
 
@@ -337,7 +436,12 @@ export class ZanzoEngine<TSchema extends SchemaData> {
     const now = new Date();
     let removed = 0;
 
-    const expiredTuples = this.tupleStore.filter((t) => t.expiresAt && t.expiresAt <= now);
+    const expiredTuples = [];
+    for (const t of this.tupleStore.values()) {
+      if (t.expiresAt && t.expiresAt <= now) {
+        expiredTuples.push(t);
+      }
+    }
 
     for (const tuple of expiredTuples) {
       this.removeTuple(tuple);
@@ -353,11 +457,10 @@ export class ZanzoEngine<TSchema extends SchemaData> {
    * Checks if a tuple is expired.
    * @internal
    */
-  private isExpired(subject: string, relation: string, object: string): boolean {
-    const stored = this.tupleStore.find(
-      (t) => t.subject === subject && t.relation === relation && t.object === object
-    );
-    if (stored?.expiresAt && stored.expiresAt <= new Date()) {
+  private isExpired(subject: string, relation: string, object: string, now: number = Date.now()): boolean {
+    const expiresAt = this.expiryIndex.get(this.uniqueTupleKey(subject, relation, object));
+    if (expiresAt && expiresAt.getTime() <= now) {
+      this.cache?.invalidate();
       return true;
     }
     return false;
@@ -382,6 +485,8 @@ export class ZanzoEngine<TSchema extends SchemaData> {
     this.validateInput(actor, 'actor');
     this.validateInput(resource, 'resource');
 
+    const now = Date.now();
+
     // For field-level resources (e.g. Review:cert1#strengths), extract the entity type
     // from the base object before the '#'
     const baseResource = resource.includes(FIELD_SEPARATOR) ? resource.split(FIELD_SEPARATOR)[0]! : resource;
@@ -396,11 +501,35 @@ export class ZanzoEngine<TSchema extends SchemaData> {
     const permissions = resourceSchema.permissions as Record<string, string[]> | undefined;
     if (!permissions) return [];
 
-    // Deduplicate routes: group actions by their route string to avoid
+    // ── Cache fast-path: resolve as many actions as possible from cache ──
+    const grantedActions = new Set<string>();
+    const uncachedActions: string[] = [];
+
+    if (this.cache) {
+      for (const action of actions) {
+        const cached = this.cache.get(actor, action, resource);
+        if (cached === true) {
+          grantedActions.add(action);
+        } else if (cached === undefined) {
+          // Cache miss — need to evaluate
+          uncachedActions.push(action);
+        }
+        // cached === false → explicitly denied, skip evaluation
+      }
+
+      // If all actions are resolved from cache, return immediately
+      if (uncachedActions.length === 0) {
+        return actions.filter(a => grantedActions.has(a));
+      }
+    } else {
+      uncachedActions.push(...actions);
+    }
+
+    // Deduplicate routes: group UNCACHED actions by their route string to avoid
     // traversing the same graph path multiple times (e.g. 'owner' used by view, edit, delete)
     const routeMap = new Map<string, { parts: string[]; actions: Set<string> }>();
 
-    for (const action of actions) {
+    for (const action of uncachedActions) {
       const relationsForAction = permissions[action];
       if (!relationsForAction || relationsForAction.length === 0) continue;
 
@@ -414,11 +543,20 @@ export class ZanzoEngine<TSchema extends SchemaData> {
       }
     }
 
-    if (routeMap.size === 0) return [];
+    if (routeMap.size === 0) {
+      // All uncached actions have no routes — they are denied. Write to cache.
+      if (this.cache) {
+        for (const action of uncachedActions) {
+          this.cache.set(actor, action, resource, false);
+        }
+      }
+      return actions.filter(a => grantedActions.has(a));
+    }
+
+    // Track which uncached actions were evaluated so we can cache denials too
+    const evaluatedActions = new Set<string>();
 
     // Evaluate each unique route once, mapping results to all associated actions
-    const grantedActions = new Set<string>();
-
     for (const { parts, actions: routeActions } of routeMap.values()) {
       // Skip if all actions for this route are already granted
       const allAlreadyGranted = [...routeActions].every(a => grantedActions.has(a));
@@ -431,7 +569,15 @@ export class ZanzoEngine<TSchema extends SchemaData> {
         resource, // Use the original resource (potentially with field separator)
         new Set<string>(),
         0,
+        '',
+        undefined,
+        undefined,
+        now,
       );
+
+      for (const action of routeActions) {
+        evaluatedActions.add(action);
+      }
 
       if (resolved) {
         for (const action of routeActions) {
@@ -441,6 +587,13 @@ export class ZanzoEngine<TSchema extends SchemaData> {
 
       // Early exit if all actions are granted
       if (grantedActions.size === actions.length) break;
+    }
+
+    // ── Write results to cache for all evaluated actions ──
+    if (this.cache) {
+      for (const action of uncachedActions) {
+        this.cache.set(actor, action, resource, grantedActions.has(action));
+      }
     }
 
     // Return in original action order to maintain deterministic output
@@ -496,7 +649,8 @@ export class ZanzoEngine<TSchema extends SchemaData> {
     // (Esto causaba que stress.test.ts fallara). Mantenemos la concatenación selectiva pasada por recursión.
 
     // Call the recursive engine internal handler (use the original resource, potentially with '#')
-    const result = this.checkRelationsRecursive(actor, preSplitRoutes, resource, new Set<string>(), 0);
+    const now = Date.now();
+    const result = this.checkRelationsRecursive(actor, preSplitRoutes, resource, new Set<string>(), 0, '', undefined, undefined, now);
 
     // Store result in cache if enabled
     this.cache?.set(actor, action as string, resource, result);
@@ -522,7 +676,9 @@ export class ZanzoEngine<TSchema extends SchemaData> {
     parentSignature: string = '',
     trace?: TraceStep[],
     routeLabels?: string[],
+    now?: number,
   ): boolean {
+    const timeToRun = now ?? Date.now();
     if (depth > 50) {
       throw new ZanzoError(ZanzoErrorCode.MAX_DEPTH_EXCEEDED, `[Zanzo] Security Exception: Maximum relationship depth of 50 exceeded. Graph might contain an infinite cycle or is too heavily nested.`);
     }
@@ -575,7 +731,7 @@ export class ZanzoEngine<TSchema extends SchemaData> {
 
       if (routeParts.length === 1) {
         // Direct relation base case check O(1)
-        const found = subjectsForRelation.has(actor) && !this.isExpired(actor, currentRelation, currentTarget);
+        const found = subjectsForRelation.has(actor) && !this.isExpired(actor, currentRelation, currentTarget, timeToRun);
         if (trace && routeLabels) {
           trace.push({
             path: routeLabels[i] || currentRelation,
@@ -595,7 +751,7 @@ export class ZanzoEngine<TSchema extends SchemaData> {
         // Optimize: we execute branching recursively into subsets, and stop at first generic success.
         for (const intermediateSubject of subjectsForRelation) {
           // Check if the intermediate tuple is expired
-          if (this.isExpired(intermediateSubject, currentRelation, currentTarget)) {
+          if (this.isExpired(intermediateSubject, currentRelation, currentTarget, timeToRun)) {
             continue;
           }
 
@@ -607,7 +763,8 @@ export class ZanzoEngine<TSchema extends SchemaData> {
             depth + 1,
             nextSignature,
             trace,
-            routeLabels ? [routeLabels[i] || routeParts.join('.')] : undefined,
+            routeLabels ? [routeLabels[i] ? routeLabels[i]!.split(RELATION_PATH_SEPARATOR).slice(1).join(RELATION_PATH_SEPARATOR) : remainingRoute.join('.')] : undefined,
+            timeToRun,
           );
 
           if (isGranted) {
@@ -616,11 +773,11 @@ export class ZanzoEngine<TSchema extends SchemaData> {
           }
         }
 
-        if (trace && routeLabels && !anyFound) {
+        if (trace && routeLabels) {
           trace.push({
             path: routeLabels[i] || routeParts.join('.'),
             target: currentTarget,
-            found: false,
+            found: anyFound,
             subjects: subjectsList,
           });
         }
@@ -662,6 +819,8 @@ export class ZanzoEngine<TSchema extends SchemaData> {
 
     const preSplitRoutes: string[][] = allowedRelationsForAction.map((route) => route.split(RELATION_PATH_SEPARATOR));
 
+    const now = Date.now();
+
     const allowed = this.checkRelationsRecursive(
       actor,
       preSplitRoutes,
@@ -671,6 +830,7 @@ export class ZanzoEngine<TSchema extends SchemaData> {
       '',
       trace,
       allowedRelationsForAction,
+      now,
     );
 
     return { allowed, trace };
@@ -698,7 +858,7 @@ export class ZanzoEngine<TSchema extends SchemaData> {
     resourceType: TResourceName,
   ): import('../ast/index').QueryAST | null {
     this.validateInput(actor, 'actor');
-    this.validateInput(resourceType as string, 'resource');
+    this.validateInput(resourceType as string, 'resourceType');
 
     const resourceSchema = this.schema[resourceType];
 

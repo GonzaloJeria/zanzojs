@@ -1,6 +1,6 @@
 {
   "name": "@zanzojs/core",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Isomorphic ReBAC Authorization for the Modern Web. Inspired by Google Zanzibar.",
   "keywords": [
     "rebac",
@@ -22,9 +22,9 @@
   "type": "module",
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
-      "require": "./dist/index.cjs",
-      "types": "./dist/index.d.ts"
+      "require": "./dist/index.cjs"
     }
   },
   "main": "./dist/index.cjs",

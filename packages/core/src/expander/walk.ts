@@ -32,24 +32,26 @@ export async function _walkExpansionGraph(
 ): Promise<WalkResult[]> {
   const results: WalkResult[] = [];
   const processedRelations = new Set<string>();
-  // Track visited objects to detect circular data references
+  
+  // Track globally visited (relation, object) pairs to deduplicate diamond graphs
+  // and avoid redundant DB queries. We do NOT throw when hitting this — we just skip.
   const visitedObjects = new Set<string>();
-  visitedObjects.add(initialTuple.object);
+  visitedObjects.add(`${initialTuple.relation}::${initialTuple.object}`);
+
+  // We need to track the path of objects for EACH branch to detect true circular references.
+  // A true cycle is when an object appears in its OWN ancestor chain.
+  interface QueueItem extends RelationTuple {
+    path: Set<string>;
+  }
+
+  const initialPath = new Set<string>();
+  initialPath.add(initialTuple.object);
 
   // Cursor-based queue for O(1) dequeue (Issue #13)
-  const queue: RelationTuple[] = [initialTuple];
+  const queue: QueueItem[] = [{ ...initialTuple, path: initialPath }];
   let cursor = 0;
 
   while (cursor < queue.length) {
-    // Guard against unbounded expansion (Issue #14)
-    if (results.length > maxSize) {
-      throw new ZanzoError(
-        ZanzoErrorCode.EXPANSION_LIMIT,
-        `[Zanzo] Security Exception: Tuple expansion exceeded maximum size of ${maxSize}. ` +
-        `Possible cycle in schema or data. Configure maxExpansionSize/maxCollapseSize to increase the limit.`
-      );
-    }
-
     const currentTuple = queue[cursor++]!;
     let objectType: string;
     try {
@@ -90,18 +92,24 @@ export async function _walkExpansionGraph(
                   const children = await fetchChildren(currentTuple.object, relName);
                   if (Array.isArray(children)) {
                     for (const child of children) {
-                      // Cycle detection: if this child was already visited during expansion,
-                      // we have a circular reference in the data
-                      if (visitedObjects.has(child)) {
+                      // TRUE CYCLE DETECTION: Is this child already an ancestor in this specific path?
+                      if (currentTuple.path.has(child)) {
                         throw new ZanzoError(
                           ZanzoErrorCode.CYCLE_DETECTED,
                           `[Zanzo] Circular reference detected during tuple expansion: ` +
-                          `"${child}" was already visited in this expansion chain. ` +
+                          `"${child}" appears in its own ancestry chain via relation "${derivedRelation}". ` +
                           `Path: "${initialTuple.object}" → ... → "${currentTuple.object}" → "${child}". ` +
                           `Review your schema and data for circular entity relationships.`
                         );
                       }
-                      visitedObjects.add(child);
+
+                      // DIAMOND GRAPH DEDUPLICATION: Has this exact (relation, object) been processed elsewhere?
+                      // If yes, it's a valid diamond graph recombination. We just skip to avoid redundant work.
+                      const visitKey = `${derivedRelation}::${child}`;
+                      if (visitedObjects.has(visitKey)) {
+                        continue; // Silently skip — it's already queued/processed
+                      }
+                      visitedObjects.add(visitKey);
 
                       const result: WalkResult = {
                         subject: currentTuple.subject,
@@ -110,11 +118,26 @@ export async function _walkExpansionGraph(
                       };
 
                       results.push(result);
+
+                      // Guard against unbounded expansion after each push (Issue #14).
+                      if (results.length > maxSize) {
+                        throw new ZanzoError(
+                          ZanzoErrorCode.EXPANSION_LIMIT,
+                          `[Zanzo] Security Exception: Tuple expansion exceeded maximum size of ${maxSize}. ` +
+                          `Possible cycle in schema or data. Configure maxExpansionSize/maxCollapseSize to increase the limit.`
+                        );
+                      }
+
+                      // Create a new path set for this branch including the new child
+                      const newPath = new Set(currentTuple.path);
+                      newPath.add(child);
+
                       // Enqueue for transitive expansion
                       queue.push({
                         subject: currentTuple.subject,
                         relation: derivedRelation,
                         object: child,
+                        path: newPath,
                       });
                     }
                   }

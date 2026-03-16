@@ -97,6 +97,32 @@ async function assignWorkspaceAdmin(workspaceId: string, userId: string) {
 }
 ```
 
+#### Modo Diferido (Background Expansion)
+Para flujos críticos de latencia, puedes usar `mode: 'deferred'`. Esto retorna inmediatamente permitiéndote ejecutar el pesado procesamiento de grafos en segundo plano sin bloquear la respuesta al usuario.
+
+```typescript
+const { baseTuple, executePending } = await materializeDerivedTuples({
+  schema,
+  newTuple,
+  fetchChildren,
+  mode: 'deferred',
+  signal: controller.signal // Recomendado: usar timeout
+});
+
+// 1. Persistir tupla base inmediatamente
+await db.insert(zanzoTuples).values(baseTuple);
+
+// 2. Procesar derivaciones en background (sin await en el hot-path del request)
+executePending()
+  .then(derived => db.insert(zanzoTuples).values(derived))
+  .catch(err => console.error("Background expansion failed", err));
+```
+
+> [!WARNING]
+> **Ventana de Inconsistencia:** En modo `deferred`, existe una ventana de tiempo entre la inserción de la tupla base y la resolución de `executePending()` donde los chequeos `can()` transitivos podrían fallar.
+> 
+> **Nota sobre AbortSignal:** El uso de `AbortSignal` rechaza la promesa inmediatamente para liberar el flujo del programa. Sin embargo, si `fetchChildren` ya inició un I/O, este continuará ejecutándose hasta que resuelva o el socket expire. El `AbortSignal` no cancela operaciones de red o DB en vuelo.
+
 #### Revocar (Eliminación de relación)
 Usas `removeDerivedTuples` y `buildBulkDeleteCondition`.
 ⚠️ **Regla de oro:** El borrado de tuplas debe usar las 3 columnas obligatorias (`eq` sobre object, relation y subject) dentro del loop transaccional. **Si filtras solo por `object` borrarás acceso de terceros.**
@@ -120,12 +146,12 @@ async function removeWorkspaceAdmin(workspaceId: string, userId: string) {
     const conditions = buildBulkDeleteCondition(toDelete);
     
     // ✅ CORRECTO: Borrado explícito de 3 componentes
-    for (const [obj, rel, sub] of conditions) {
+    for (const [sub, rel, obj] of conditions) {
       await tx.delete(zanzoTuples).where(
         and(
-          eq(zanzoTuples.object, obj),
+          eq(zanzoTuples.subject, sub),
           eq(zanzoTuples.relation, rel),
-          eq(zanzoTuples.subject, sub)
+          eq(zanzoTuples.object, obj)
         )
       );
     }
@@ -233,15 +259,28 @@ results.get('write:Document:doc1'); // false
 
 ### Permission Cache (`enableCache()`)
 Habilita la caché interna en memoria por TTL. Útil en workers de larga duración y singletons.
-> [!NOTE]
-> La caché se invalida **automáticamente** sobre el cache store completo al mutar una tupla programáticamente a través de `engine.addTuple()`, `load()`, `removeTuple()` o `clearTuples()`.
+
+#### CacheOptions
+- `ttlMs`: Tiempo de vida de las entradas en milisegundos.
+- `invalidationType`:
+  - `'selective'` (Default): Optimiza el rendimiento invalidando únicamente las entradas del cache que están transitivamente afectadas por la mutación del grafo.
+  - `'full'`: Replica el comportamiento estricto de v0.3.0 invalidando la caché completa ante cualquier cambio. Útil para debugging radical.
 
 ```typescript
-engine.enableCache({ ttlMs: 5000 });
+// Optimización extrema para producción
+engine.enableCache({
+  ttlMs: 5000,
+  invalidationType: 'selective'
+});
+
+// Comportamiento determinístico total
+engine.enableCache({
+  ttlMs: 5000,
+  invalidationType: 'full'
+});
 
 engine.for('User:alice').can('read').on('Document:1'); // Cache MISS
-engine.for('User:alice').can('read').on('Document:1'); // Cache HIT
-engine.grant('owner').to('User:alice').on('Document:1'); // INVALIDA CACHE
+engine.grant('owner').to('User:alice').on('Document:1'); // Invalida solo lo afectado
 engine.disableCache();
 ```
 
@@ -261,7 +300,7 @@ const snapshot = createZanzoSnapshot(engine, 'User:alice', {
 
 - `deduplicateTuples(tuples)`: Retorna el array sin tuplas repetidas evaluadas por la firma base.
 - `uniqueTupleKey(tuple)`: Retorna la firma: `"User:1|admin|Org:A"`.
-- `buildBulkDeleteCondition(tuples)`: Retorna el array `[object, relation, subject][]` para borrado en masa. **El retorno es en ese orden asimétrico ex profeso por indexación de B-tree.**
+- `buildBulkDeleteCondition(tuples)`: Retorna el array `[subject, relation, object][]` para borrado en masa.
 
 ### Manejo de Errores Estructurado (`ZanzoError`)
 Cualquier falla lanza una clase `ZanzoError`. Puedes atajar esto con códigos tipados para APM.
@@ -322,34 +361,43 @@ engine.load([
 | `engine.for(a).can(x).on(r)` | In-Memory / React | `boolean` | Valida permisos en memoria sin delay de red. |
 | `engine.for(a).check(x).on(r)` | Debug | `{ allowed, trace }`| Retorna la evaluación auditada paso-a-paso de O(1). |
 | `engine.for(a).canBatch(arr)` | In-Memory / Perform. | `Map<string, boolean>` | Procesa peticiones masivas agrupando accesos a grafo. |
-| `materializeDerivedTuples` | Backend SQL (Create) | `Promise<RelationTuple[]>` | Computa relaciones jerárquicas transitivas (Padre a Hijo). |
+| `materializeDerivedTuples` | Backend SQL (Create) | `Promise<RelationTuple[]> \| Promise<DeferredExpansion>` | Computa relaciones jerárquicas transitivas (Padre a Hijo). |
 | `removeDerivedTuples` | Backend SQL (Delete) | `Promise<RelationTuple[]>` | Inversa transitiva. |
 | `buildBulkDeleteCondition` | Backend SQL (Delete) | `[obj, rel, sub][]` | Convierte tuplas de removal en array transaccional Drizzle. |
 | `createZanzoAdapter` | Backend SQL (Read) | `(a, x, r, col) => SQL` | Pushes el AST al DB de la forma más rápida generando subqueries `EXISTS`. |
 | `createZanzoSnapshot` | Backend -> SSR -> React| `Record<string, string[]>` | Payload ultra pequeño para pasar a Contextos de Front-End. |
 | `engine.grant().to().on()` | Memoria / Testing | `void` | Mutar el store puramente en memoria. |
-| `engine.enableCache({ttl})` | Memoria | `void` | Intercepta `can` con un LRU por 3 keys (`actor|action|resource`). |
+| `engine.enableCache({ttl, type})` | Memoria | `void` | Intercepta `can` con un LRU y soporte para invalidación selectiva. |
 
 ---
 
-## Parte 5 — Guía de Migración (desde v0.2.x)
+### v0.2.x ➔ v0.3.0 (Zanzibar Optimizations & Improvements)
 
-ZanzoJS v0.3.0 introduce mejoras estrictas en tipado y manejo de errores. Aquí detallamos los cambios que afectan código existente:
+1. **Carácter `|` prohibido en IDs (Breaking)**
+   - El motor ahora utiliza `|` como delimitador interno para la caché selectiva.
+   - Si un identificador contiene `|`, el motor lanzará `INVALID_INPUT`. 
+   - *Migration Path*: Sanitiza tus IDs (reemplazando `|` por `-` o `_`) antes de pasarlos a cualquier método de ZanzoJS.
 
-1. **Renombre de Tuple Helpers**
+2. **Nuevo error `EXPANSION_ABORTED`**
+   - Introducido para soportar `AbortSignal` en el modo diferido de expansión. No requiere cambios en código que no utilice estas nuevas APIs.
+
+3. **Linter de CLI (`zanzo check`)**
+   - El comando ahora detecta "dead code" en tu schema. Puede retornar warnings para acciones sin permisos, relaciones no utilizadas o entidades huérfanas. 
+   - *Migration Path*: Si integras el CLI en tu pipeline de CI, asegúrate de que el log de warnings no rompa tus parsers automáticos. El exit code sigue siendo `0` si solo hay warnings.
+
+4. **Renombre de Tuple Helpers**
    - *Antes (v0.2.x)*: `expandTuples` y `collapseTuples`.
    - *Ahora (v0.3.0)*: `materializeDerivedTuples` y `removeDerivedTuples`.
    - *Migration Path*: Find-and-replace directo en todo tu proyecto. Las firmas y comportamientos son idénticos. (Las versiones anteriores siguen exportadas pero marcadas como `@deprecated`).
 
-2. **Validación Estricta de Schema (Breaking)**
+5. **Validación Estricta de Schema (Breaking)**
    - *Antes (v0.2.x)*: Si el schema definía un permiso basado en una relación inexistente (ej. `permissions: { read: ['viewer', 'typo'] }`), pasaba en silencio y fallaba en runtime.
    - *Ahora (v0.3.0)*: `new ZanzoEngine(schema)` aborta la ejecución inmediatamente lanzando el error `ZANZO_MISSING_RELATION`.
-   - *Migration Path*: Si al actualizar tu app no arranca, lee el mensaje de error. Te indicará exactamente qué entidad y qué permiso contiene el typo en la relación para que lo arregles en `zanzo.config.ts`.
 
-3. **Formato del Snapshot (Breaking)**
+6. **Formato del Snapshot (Breaking)**
    - *Antes (v0.2.x)*: Usaba un tipo complejo `CompiledPermissions`.
    - *Ahora (v0.3.0)*: Retorna un puro `Record<string, string[]>` altamente serializable.
-   - *Migration Path*: Eliminar todas las importaciones e inferencias de `CompiledPermissions` y depender exclusivamente de la inferencia de types de `createZanzoSnapshot`, o usar `Record<string, string[]>`.
+
 
 ---
 
@@ -492,3 +540,5 @@ Lanzados vía la clase `ZanzoError`. El código de error puede validarse mediant
 | `MISSING_PROVIDER` | Hook `useZanzo` llamado fuera del `ZanzoProvider`. | Envuelve la app de React en el Provider. |
 | `MISSING_RELATION` | **(Crashea en Boot)** `permissions` contiene paths hacia `relations` no definidas. | Revisa y corrige el typo en las keys del schema `zanzo.config.ts`. |
 | `CYCLE_DETECTED` | Inferencia circular detectada al expandir tuplas en la base de datos (Ej: A→B→A). | Evita relaciones circulares en el fetching y aplica la limpieza en base de datos. |
+| `EXPANSION_ABORTED` | `executePending()` fue cancelado via `AbortSignal` antes de completar la expansión. | Aumentar el timeout del `AbortController`, o revisar si `fetchChildren` tiene una consulta lenta o una conexión colgada. |
+

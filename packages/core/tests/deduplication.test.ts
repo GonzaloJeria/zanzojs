@@ -87,8 +87,8 @@ describe('buildBulkDeleteCondition', () => {
 
     const result = buildBulkDeleteCondition(tuples);
     expect(result).toEqual([
-      ['Project:1', 'org.admin', 'User:1'],
-      ['Project:2', 'org.admin', 'User:1'],
+      ['User:1', 'org.admin', 'Project:1'],
+      ['User:1', 'org.admin', 'Project:2'],
     ]);
   });
 
