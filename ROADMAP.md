@@ -68,3 +68,6 @@ A continuación se detalla el plan de desarrollo para llegar a la versión compl
 
 - [x] **Fase 22: CLI Starter Kits & Topology Architecture (v0.x.3)**
   Reescritura interactiva del scaffolding del comando `zanzojs init`. Inclusión de pre-validación de rutas/directorios vacíos y separación de Inyección de Dependencias ReBAC por topologías arquitectónicas estrictas (Frontend-only, Backend-only, Fullstack). Adición de Plantillas Mentales Isomorfas pre-construidas (B2B SaaS Multi-tenant, Social Media y Simple RBAC).
+
+- [x] **Fase 23: CLI Template React Components & Auto-Dependencies (v0.3.3)**
+  Refactorización del generador para inyectar automáticamente dependencias clave al árbol del proyecto destino (`npm install @zanzojs/core`). Implementación de generadores visuales de demostración: un Admin Dashboard nativo para la plantilla B2B Multi-tenant y un Feed/WebBlog interactivo para Social Media, renderizados en App Router usando Tailwind y React Server Components listos para testear la suite ReBAC.

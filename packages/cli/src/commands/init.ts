@@ -210,18 +210,33 @@ export async function initCommand(): Promise<void> {
   await generateUI(selectedTemplate, framework as string, outputDir as string);
   await sleep(200);
 
-  s.message('Installing Zanzo ecosystem dependencies...');
+  s.message('Injecting Zanzo dependencies into package.json...');
   try {
-    const deps = ['@zanzojs/core'];
-    if (framework === 'nextjs-app' || framework === 'nextjs-pages' || topology === 'frontend' || topology === 'fullstack') {
-      deps.push('@zanzojs/react');
+    const pkgPath = path.resolve(process.cwd(), 'package.json');
+    if (fs.existsSync(pkgPath)) {
+      const pkgRaw = fs.readFileSync(pkgPath, 'utf8');
+      const pkg = JSON.parse(pkgRaw);
+      pkg.dependencies = pkg.dependencies || {};
+      
+      pkg.dependencies['@zanzojs/core'] = '^0.3.1';
+      
+      if (framework === 'nextjs-app' || framework === 'nextjs-pages' || topology === 'frontend' || topology === 'fullstack') {
+        pkg.dependencies['@zanzojs/react'] = '^0.3.0';
+      }
+      
+      if (_orm === 'drizzle') {
+        pkg.dependencies['@zanzojs/drizzle'] = '^0.3.2';
+      }
+      
+      fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2), 'utf8');
+      
+      // Attempt generic sync using contextual package-manager 
+      const userAgent = process.env['npm_config_user_agent'] || '';
+      const pm = userAgent.includes('pnpm') ? 'pnpm' : userAgent.includes('yarn') ? 'yarn' : 'npm';
+      execSync(`${pm} install`, { stdio: 'ignore' });
     }
-    if (_orm === 'drizzle') {
-      deps.push('@zanzojs/drizzle');
-    }
-    execSync(`npm install ${deps.join(' ')} --save`, { stdio: 'ignore' });
   } catch (err) {
-    p.log.warn('Could not auto-install dependencies. Run npm i @zanzojs/core manually.');
+    p.log.warn('Could not auto-install dependencies natively. Make sure to run your package manager install manually.');
   }
 
   s.stop(pc.green('Zanzo Boilerplate generated successfully! 🔥'));
