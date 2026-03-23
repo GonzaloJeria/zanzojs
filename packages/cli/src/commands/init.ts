@@ -198,7 +198,7 @@ export async function initCommand(): Promise<void> {
     await sleep(400);
 
     s.message(`Generating ${framework} API routes...`);
-    await generateRoutes(framework as FrameworkType, outputDir as string);
+    await generateRoutes(framework as FrameworkType, _orm as string, outputDir as string);
     await sleep(400);
   }
 
