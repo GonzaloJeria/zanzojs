@@ -1,6 +1,6 @@
 {
   "name": "@zanzojs/angular",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Angular 19 Signals-first adapter for Zanzo ReBAC.",
   "type": "module",
   "exports": {
