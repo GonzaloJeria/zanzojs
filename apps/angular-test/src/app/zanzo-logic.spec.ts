@@ -1,77 +1,60 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ZanzoService } from '../../../../packages/angular/src/service';
 import { adminSnapshot, viewerSnapshot } from '../mock-snapshots';
 import { schema, testExtension } from '../zanzo.config';
-
-// Mock Angular's TransferState since it's used in the constructor
-vi.mock('@angular/core', async () => {
-  const actual = await vi.importActual('@angular/core');
-  return {
-    ...actual,
-    inject: vi.fn(),
-    makeStateKey: (k: string) => k,
-    TransferState: class {
-      get = vi.fn().mockReturnValue(null);
-      has = vi.fn().mockReturnValue(false);
-    },
-    PLATFORM_ID: 'browser'
-  };
-});
 
 describe('Zanzo Angular Integration Logic', () => {
   let service: ZanzoService<typeof schema>;
 
   beforeEach(() => {
-    // @ts-ignore - bypassing inject for testing
+    // Instantiate raw service without TestBed injection context
+    // The inner try/catch around inject() will absorb the missing context natively
     service = new ZanzoService<typeof schema>();
-    // @ts-ignore - manual setup of internals for test environment without provideZanzo
-    service['schema'] = schema;
+    
+    // Inject schema manually to test engine bypass mechanics
+    (service as any)['schema'] = schema;
   });
 
   it('1. Hydrate as Admin: verifies full permissions', () => {
     service.hydrate(adminSnapshot, testExtension);
     
-    expect(service.isHydrated()).toBe(true);
+    expect(service.isHydrated()).toBeTrue();
     // Correctly unwrapping signals
-    expect(service.can('read', 'Module:ws1_ventas')()).toBe(true);
-    expect(service.can('update', 'Module:ws1_ventas')()).toBe(true);
-    expect(service.can('delete', 'Module:ws1_ventas')()).toBe(true);
-    expect(service.can('use', 'Capability:export_csv' as any)()).toBe(true);
+    expect(service.can('read', 'Module:ws1_ventas')()).toBeTrue();
+    expect(service.can('update', 'Module:ws1_ventas')()).toBeTrue();
+    expect(service.can('delete', 'Module:ws1_ventas')()).toBeTrue();
+    expect(service.can('use', 'Capability:export_csv' as any)()).toBeTrue();
   });
 
   it('2. Hydrate as Viewer: verifies partial permissions (Read-Only)', () => {
     service.hydrate(viewerSnapshot, testExtension);
     
-    expect(service.isHydrated()).toBe(true);
-    expect(service.can('read', 'Module:ws1_ventas')()).toBe(true);
-    expect(service.can('update', 'Module:ws1_ventas')()).toBe(false);
-    expect(service.can('delete', 'Module:ws1_ventas')()).toBe(false);
+    expect(service.isHydrated()).toBeTrue();
+    expect(service.can('read', 'Module:ws1_ventas')()).toBeTrue();
+    expect(service.can('update', 'Module:ws1_ventas')()).toBeFalse();
+    expect(service.can('delete', 'Module:ws1_ventas')()).toBeFalse();
     // Extension check (Capability:export_csv should be false for viewer)
-    expect(service.can('use', 'Capability:export_csv' as any)()).toBe(false);
+    expect(service.can('use', 'Capability:export_csv' as any)()).toBeFalse();
   });
 
   it('3. Clear: verifies all permissions are revoked', () => {
     service.hydrate(adminSnapshot, testExtension);
     service.clear();
     
-    expect(service.isHydrated()).toBe(false);
-    expect(service.can('read', 'Module:ws1_ventas')()).toBe(false);
-    expect(service.can('update', 'Module:ws1_ventas')()).toBe(false);
+    expect(service.isHydrated()).toBeFalse();
+    expect(service.can('read', 'Module:ws1_ventas')()).toBeFalse();
+    expect(service.can('update', 'Module:ws1_ventas')()).toBeFalse();
   });
 
   it('4. Re-hydrate as Admin: verifies reactivity', () => {
     service.hydrate(viewerSnapshot, testExtension);
-    expect(service.can('update', 'Module:ws1_ventas')()).toBe(false);
+    expect(service.can('update', 'Module:ws1_ventas')()).toBeFalse();
     
     // Immediate update simulated
     service.hydrate(adminSnapshot, testExtension);
-    expect(service.can('update', 'Module:ws1_ventas')()).toBe(true);
+    expect(service.can('update', 'Module:ws1_ventas')()).toBeTrue();
   });
 
   it('5. Security Regression: Viewer should not inherit actions (God-Mode Bug)', () => {
-    // We create a custom snapshot where one object has 'read' and another has 'update'.
-    // If the God-Mode bug exists, the Evaluator would be granted 'update' on the first object
-    // merely because 'update' exists ANYWHERE in the snapshot and the first object was present.
     const customSnapshot = {
       'Module:read_only': ['read'],
       'Module:update_only': ['update'],
@@ -79,14 +62,10 @@ describe('Zanzo Angular Integration Logic', () => {
     
     service.hydrate(customSnapshot);
     
-    // Valid access:
-    expect(service.can('read', 'Module:read_only')()).toBe(true);
-    expect(service.can('update', 'Module:update_only')()).toBe(true);
+    expect(service.can('read', 'Module:read_only')()).toBeTrue();
+    expect(service.can('update', 'Module:update_only')()).toBeTrue();
     
-    // Invalid access (The Bug): 
-    // Before the fix, the engine granted 'update' on 'Module:read_only' just 
-    // because it was extracting ALL actions globally and applying them to ALL objects.
-    expect(service.can('update', 'Module:read_only')()).toBe(false);
-    expect(service.can('read', 'Module:update_only')()).toBe(false);
+    expect(service.can('update', 'Module:read_only')()).toBeFalse();
+    expect(service.can('read', 'Module:update_only')()).toBeFalse();
   });
 });
