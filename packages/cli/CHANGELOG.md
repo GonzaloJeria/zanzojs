@@ -1,5 +1,11 @@
 # @zanzojs/cli
 
+## 0.3.3
+
+### Patch Changes
+
+- 245b6ef: feat(cli): Add functional framework UI generators for B2B/Social templates and auto-inject `@zanzojs` core packages into the target project via standard package-managers.
+
 ## 0.3.2
 
 ### Patch Changes
