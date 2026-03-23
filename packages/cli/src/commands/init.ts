@@ -12,6 +12,7 @@ import { generateSchema } from '../generators/schema';
 import { generateMigration } from '../generators/migration';
 import { generateRoutes } from '../generators/routes';
 import { generateAgentContext } from '../generators/agent-context';
+import { generateUI } from '../generators/ui';
 import type { FrameworkType } from '../templates/routes/permissions';
 import type { DatabaseType } from '../templates/migration';
 import type { AgentType } from '../generators/agent-context';
@@ -203,15 +204,33 @@ export async function initCommand(): Promise<void> {
 
   s.message('Configuring AI agent context...');
   await generateAgentContext(agent as AgentType);
-  await sleep(400);
+  await sleep(200);
 
-  s.stop(pc.green('Boilerplate generated successfully!'));
+  s.message('Injecting User Interfaces...');
+  await generateUI(selectedTemplate, framework as string, outputDir as string);
+  await sleep(200);
+
+  s.message('Installing Zanzo ecosystem dependencies...');
+  try {
+    const deps = ['@zanzojs/core'];
+    if (framework === 'nextjs-app' || framework === 'nextjs-pages' || topology === 'frontend' || topology === 'fullstack') {
+      deps.push('@zanzojs/react');
+    }
+    if (_orm === 'drizzle') {
+      deps.push('@zanzojs/drizzle');
+    }
+    execSync(`npm install ${deps.join(' ')} --save`, { stdio: 'ignore' });
+  } catch (err) {
+    p.log.warn('Could not auto-install dependencies. Run npm i @zanzojs/core manually.');
+  }
+
+  s.stop(pc.green('Zanzo Boilerplate generated successfully! 🔥'));
 
   const migrationCommand = getMigrationCommand(database as DatabaseType);
-  const routePaths = getRoutePaths(framework, outputDir as string);
+  const routePaths = getRoutePaths(framework as FrameworkType, outputDir as string);
 
   const steps = [
-    `${pc.bold('ZanzoJS is ready. Next steps:')}`,
+    `${pc.bold('Your environment is ready. Next steps:')}`,
     ''
   ];
   if (topology !== 'frontend') {
@@ -240,6 +259,13 @@ export async function initCommand(): Promise<void> {
   steps.push(`     ${pc.dim('// 2. Pass to provider')}`);
   steps.push(`     <ZanzoProvider snapshot={snapshot}>...<\/ZanzoProvider>`);
   steps.push('');
+  
+  if (framework === 'nextjs-app' && !Array.isArray(selectedTemplate)) {
+    const route = selectedTemplate === 'b2b' ? '/dashboard' : selectedTemplate === 'social' ? '/feed' : '/admin';
+    steps.push(`  ${pc.magenta(`✨ Check out your pre-built functional UI: npm run dev then visit http://localhost:3000${route}`)}`);
+    steps.push('');
+  }
+
   steps.push(`  Docs: ${pc.underline('https://github.com/GonzaloJeria/zanzo')}`);
 
   p.note(steps.join('\n'), 'Next Steps');
