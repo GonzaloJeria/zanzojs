@@ -5,6 +5,7 @@
 
 import { initCommand } from './commands/init';
 import { checkCommand } from './commands/check';
+import { syncCommand } from './commands/sync';
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -19,6 +20,8 @@ async function main(): Promise<void> {
       process.exit(1);
     }
     await checkCommand(args[configIndex + 1]!);
+  } else if (command === 'sync') {
+    await syncCommand(args);
   } else {
     console.log(`
   @zanzojs/cli — Scaffold your ZanzoJS project
@@ -26,9 +29,11 @@ async function main(): Promise<void> {
   Usage:
     zanzojs init                   Initialize ZanzoJS in your project
     zanzojs check --config <path>  Validate a zanzo.config.ts schema statically
+    zanzojs sync --extensions <p>  Synchronize frontend capabilities with the DB
 
   Options:
     --help          Show this help message
+
 
   Docs: https://github.com/GonzaloJeria/zanzo
 `);

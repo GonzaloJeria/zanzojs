@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { createZanzoAdapter } from '../src/index.js';
 import { ZanzoBuilder, ZanzoEngine, RelationTuple } from '@zanzojs/core';
@@ -96,5 +96,44 @@ describe('@zanzo/drizzle Zero-Config Adapter', () => {
     expect(params).toContain('owner');
     expect(params).toContain('team.member');
     expect(params).toContain('User:99'); 
+  });
+
+  it('should apply debug mode and output logs without crashing', () => {
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
+    const authz = createZanzoAdapter(engine, zanzoTuples, { debug: true });
+    
+    authz('User:1', 'read', 'Invoice', invoices.id);
+    
+    expect(debugSpy).toHaveBeenCalled();
+    debugSpy.mockRestore();
+  });
+
+  it('should respect custom dialect settings (mysql)', () => {
+    const authz = createZanzoAdapter(engine, zanzoTuples, { dialect: 'mysql' });
+    const result = authz('User:1', 'pay', 'Invoice', invoices.id);
+    const { sql: rawSql } = dialect.sqlToQuery(result as any);
+    
+    // MySQL uses CONCAT (default in the adapter logic for mysql/postgres)
+    expect(rawSql).toContain('CONCAT');
+    expect(rawSql).not.toContain('||');
+  });
+
+  it('should throw AST_OVERFLOW if the engine returns too many conditions', () => {
+    let megaBuilder = new ZanzoBuilder();
+    const relations: string[] = [];
+    for (let i = 0; i < 110; i++) {
+      megaBuilder = megaBuilder.entity(`Rel${i}` as any, { actions: [], relations: {} }) as any;
+      relations.push(`rel${i}`);
+    }
+    megaBuilder = megaBuilder.entity('Large', {
+      actions: ['read'],
+      relations: Object.fromEntries(relations.map(r => [r, 'User'])),
+      permissions: { read: relations as any }
+    }) as any;
+    
+    const largeEngine = new ZanzoEngine(megaBuilder.build());
+    const authz = createZanzoAdapter(largeEngine, zanzoTuples);
+
+    expect(() => authz('User:1', 'read' as any, 'Large' as any, invoices.id)).toThrow('[Zanzo] Security Exception');
   });
 });

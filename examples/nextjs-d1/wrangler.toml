@@ -1,0 +1,7 @@
+name = "example-nextjs-d1"
+pages_build_output_dir = ".next"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "zanzo-db"
+database_id = "your-database-id" # Replace with actual ID

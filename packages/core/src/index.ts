@@ -1,6 +1,7 @@
 export * from './errors';
 export * from './ref/index';
 export * from './types/index';
+export * from './extensions/index';
 export * from './builder/index';
 export * from './engine/index';
 export type { CheckResult, TraceStep } from './engine/trace';

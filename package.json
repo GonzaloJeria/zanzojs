@@ -20,8 +20,9 @@
     "cli": "node packages/cli/dist/index.js"
   },
   "devDependencies": {
-    "turbo": "latest",
-    "@changesets/cli": "latest"
+    "@changesets/cli": "latest",
+    "puppeteer": "^24.40.0",
+    "turbo": "latest"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
@@ -29,5 +30,8 @@
       "es5-ext",
       "esbuild"
     ]
+  },
+  "dependencies": {
+    "tslib": "^2.8.1"
   }
 }

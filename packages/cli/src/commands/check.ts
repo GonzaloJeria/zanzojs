@@ -155,8 +155,23 @@ export async function checkCommand(configPath: string) {
       // If an entity is never targeted by any other entity's relation and has no relations itself, it's totally isolated.
       // If it has relations but is just never targeted, it might be a top-level leaf (like Document), but the check warns anyway to encourage pruning dead schemas.
       if (!allReferencedTargets.has(entityName)) {
-        printWarning(entityName, `Unreferenced Entity`,
-          `This entity is defined in the schema but no other entity references it in its relations.`);
+        printWarning(entityName, 'Unreferenced Entity',
+          'This entity is defined in the schema but no other entity references it in its relations.');
+      }
+
+      // 4. Edge Compatibility: AST Complexity Check
+      // We simulate buildDatabaseQuery for all actions to ensure they don't exceed Edge limits.
+      for (const action of actions) {
+        const paths = permissions[action] || [];
+        if (paths.length > 50) {
+          printWarning(entityName, `High AST Complexity for action "${action}"`,
+            `This action generates ${paths.length} conditional branches. While valid, more than 50 branches may impact performance in Edge Runtimes.`);
+        }
+        if (paths.length > 100) {
+          printError(entityName, `AST Overflow for action "${action}"`,
+            `This action generates ${paths.length} conditional branches, exceeding the safety limit of 100.`,
+            'Refactor your schema to consolidate permissions or use flatter relationship structures.');
+        }
       }
     }
 

@@ -70,26 +70,49 @@ async function getReadableDocuments(userId: string) {
 }
 ```
 
-## Configuration Options
+## Cloudflare D1 & Edge Runtime
 
-`createZanzoAdapter` accepts an optional `options` object:
+Zanzo is fully compatible with Cloudflare Pages and D1. Since the D1 driver for Drizzle is asynchronous, ensuring your adapter is correctly configured is key.
+
+### 1. Configuration for D1
+When using Cloudflare D1, always set the `dialect` to `'sqlite'`.
 
 ```typescript
+import { createZanzoAdapter } from '@zanzojs/drizzle';
+import { engine } from './zanzo.config';
+import { zanzoTuples } from './schema';
+
+// The adapter is synchronous (generates SQL filters), 
+// but D1 execution is always asynchronous.
 export const withPermissions = createZanzoAdapter(engine, zanzoTuples, {
-  dialect: 'postgres', // 'postgres' (default), 'mysql', or 'sqlite'
-  debug: false,       // Set to true to log generated SQL and AST
-  warnOnNestedConditions: true // Warns if materialized tuples are missing
+  dialect: 'sqlite'
 });
 ```
 
-### 1. SQL Injection Prevention
-As of v0.3.0, the adapter avoids `sql.raw` for all resource identifiers. All inputs are handled via Drizzle's secure parameter binding.
+### 2. Usage in Next.js (middleware/layout)
+When using `@cloudflare/next-on-pages`, you access the D1 binding via the Request Context.
 
-### 2. Dialect Support
-The adapter is dialect-aware. If you use SQLite, specify `{ dialect: 'sqlite' }` to use the `||` operator for string concatenation instead of `CONCAT`.
+```typescript
+import { getRequestContext } from '@cloudflare/next-on-pages';
+import { drizzle } from 'drizzle-orm/d1';
 
-### 3. AST Caching
-The adapter includes internal caching of structural permission trees (ASTs), minimizing CPU overhead for repeated queries on the same resource types.
+export const runtime = 'edge';
+
+export default async function Page() {
+  const { env } = getRequestContext();
+  const db = drizzle(env.DB);
+  
+  const myDocs = await db.select()
+    .from(documents)
+    .where(withPermissions('User:alice', 'read', 'Document', documents.id));
+    
+  return <pre>{JSON.stringify(myDocs)}</pre>;
+}
+```
+
+### 3. Limitations & Differences
+- **Async-only**: D1 does not support synchronous queries. While `withPermissions` returns a synchronous `SQL` object, the final `.where()` call must be awaited as part of the Drizzle query.
+- **AST Complexity**: The Edge Runtime has strict CPU and memory limits. Use `zanzo check` in your CI/CD to ensure your schema doesn't generate overly complex ASTs (standard limit: 100 conditional branches).
 
 ## Write Operations
 

@@ -53,3 +53,15 @@ A continuación se detalla el plan de desarrollo para llegar a la versión compl
   - Integración de `AbortSignal` en `executePending()`.
   - CLI `zanzo check` con linter de "dead code" (warnings).
   - Versión final lista para despliegue.
+
+- [x] **Fase 18: Frontend Capabilities (ZanzoExtension)**
+  Implementación de `ZanzoExtension` para declarar capabilities estáticas por instancia de entidad en el frontend (ej. `Module:ventas` -> `export_csv`), con validación de tuplas, tipo estricto `ExtractCapabilityActions`, e inyección dinámica al motor en memoria usando `engine.loadExtensions()`. Se agregó también el comando `zanzo sync` a `@zanzojs/cli` para sincronización isomórfica directamente a PostgreSQL en *build time*.
+
+- [x] **Fase 19: Ecosistema Angular (@zanzojs/angular)**
+  Primer adapter oficial para Angular 19 basado íntegramente en Signals. Soporte nativo para standalone components, pipes puros, directivas estructurales y guards funcionales con integración para SSR (TransferState) y Apollo GraphQL. Verificado con app E2E y suite de integración.
+
+- [x] **Fase 20: Security Patches & Core Hardening (v0.x.1)**
+  Parche de seguridad crítico en `@zanzojs/drizzle` (v0.3.1) eliminando cross-user data leakage en caché de AST. Refactorización de `@zanzojs/angular` (v0.1.1) eliminando el God-mode schema dinámico en favor de `ZanzoClient` determinista.
+
+- [x] **Fase 21: Cloudflare Edge & D1 Support (v0.x.2)**
+  Certificación de compatibilidad total con el stack Next.js + Cloudflare Pages + D1. Hardening del adapter Drizzle para el Edge Runtime, eliminación de dependencias de Node.js en el core, y validación de complejidad de AST en el CLI. Ejemplo funcional completo en `examples/nextjs-d1`.

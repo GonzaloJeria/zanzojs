@@ -25,31 +25,31 @@ export async function POST(request: NextRequest) {
   const baseTuple = { subject, relation, object };
 
   try {
-    const result = await db.transaction(async (tx) => {
-      // 1. Calculate derivations to remove
-      const derived = await removeDerivedTuples({
-        schema: engine.getSchema(),
-        revokedTuple: baseTuple,
-        fetchChildren: async (parent, rel) => {
-          const rows = tx
-            .select({ object: zanzoTuples.object })
-            .from(zanzoTuples)
-            .where(
-              and(
-                eq(zanzoTuples.subject, parent),
-                eq(zanzoTuples.relation, rel),
-              ),
-            )
-            .all();
-          return rows.map((r) => r.object);
-        },
-      });
+    // 1. Calculate derivations to remove OUTSIDE the transaction
+    const derived = await removeDerivedTuples({
+      schema: engine.getSchema(),
+      revokedTuple: baseTuple,
+      fetchChildren: async (parent, rel) => {
+        const rows = db
+          .select({ object: zanzoTuples.object })
+          .from(zanzoTuples)
+          .where(
+            and(
+              eq(zanzoTuples.subject, parent),
+              eq(zanzoTuples.relation, rel),
+            ),
+          )
+          .all();
+        return rows.map((r) => r.object);
+      },
+    });
 
+    // 2. Open a synchronous transaction for writes
+    const result = db.transaction((tx) => {
       const allToDelete = [baseTuple, ...derived];
       const conditions = buildBulkDeleteCondition(allToDelete);
 
       let deleted = 0;
-      // 2. Perform bulk deletion
       for (const [sub, rel, obj] of conditions) {
         const res = tx
           .delete(zanzoTuples)

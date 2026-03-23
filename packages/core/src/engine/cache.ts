@@ -22,6 +22,13 @@ export interface CacheOptions {
    * @default 'selective'
    */
   invalidationType?: 'selective' | 'full';
+  /**
+   * Threshold for the number of entries in the cache before falling back to
+   * a full cache clear during selective invalidation. A DFS traversal on a very
+   * large cache can be more expensive than a full clear.
+   * @default 1000
+   */
+  selectiveThreshold?: number;
 }
 
 interface CacheEntry {
@@ -33,10 +40,12 @@ export class PermissionCache {
   private cache = new Map<string, CacheEntry>();
   private ttlMs: number;
   private invalidationType: 'selective' | 'full';
+  private selectiveThreshold: number;
 
   constructor(options: CacheOptions = {}) {
     this.ttlMs = options.ttlMs ?? 5000;
     this.invalidationType = options.invalidationType ?? 'selective';
+    this.selectiveThreshold = options.selectiveThreshold ?? 1000;
   }
 
   /**
@@ -79,6 +88,11 @@ export class PermissionCache {
     isReachable?: (start: string, target: string) => boolean
   ): void {
     if (this.invalidationType === 'full' || !mutatedTuple || !isReachable) {
+      this.cache.clear();
+      return;
+    }
+
+    if (this.cache.size > this.selectiveThreshold) {
       this.cache.clear();
       return;
     }

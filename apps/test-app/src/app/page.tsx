@@ -9,9 +9,9 @@ const CRUD_ACTIONS = ['create', 'read', 'update', 'delete'] as const;
 
 const ACTION_META: Record<string, { label: string; icon: string; color: string }> = {
     create: { label: 'Create', icon: '➕', color: 'var(--success)' },
-    read: { label: 'Read', icon: '👁', color: 'var(--accent-light)' },
+    read: { label: 'Read', icon: '👁', color: 'var(--accent)' },
     update: { label: 'Update', icon: '✏️', color: 'var(--warning)' },
-    delete: { label: 'Delete', icon: '🗑️', color: 'var(--danger)' },
+    delete: { label: 'Delete', icon: '🗑️', color: 'var(--error)' },
 };
 
 // ─── Module definitions ──────────────────────────────────────────────────
@@ -23,9 +23,9 @@ const MODULE_DEFS: Record<string, { name: string; icon: string }> = {
 
 // ─── User metadata ───────────────────────────────────────────────────────
 const USERS = [
-    { id: 'alice', label: 'Alice', role: 'Admin de ws1 (CRUD completo)' },
-    { id: 'bob', label: 'Bob', role: 'Contributor / Viewer / Manager' },
-    { id: 'carol', label: 'Carol', role: 'Sin acceso' },
+    { id: 'alice', label: 'Alice', role: 'Workspace Admin', desc: 'Full Workspace CRUD' },
+    { id: 'bob', label: 'Bob', role: 'Contributor', desc: 'Can CRU in Facturación' },
+    { id: 'carol', label: 'Carol', role: 'No Access', desc: 'Zero Permissions' },
 ];
 
 const WORKSPACES = [
@@ -35,7 +35,6 @@ const WORKSPACES = [
 ];
 
 // ─── Module Card with CRUD badges ────────────────────────────────────────
-
 function ModuleCard({ moduleId, moduleName, icon, workspaceId, grantedActions }: {
     moduleId: string;
     moduleName: string;
@@ -44,22 +43,45 @@ function ModuleCard({ moduleId, moduleName, icon, workspaceId, grantedActions }:
     grantedActions: string[];
 }) {
     return (
-        <div className="module-card">
-            <div className="module-card__icon">{icon}</div>
-            <div className="module-card__name">{moduleName}</div>
-            <div className="module-card__workspace">Workspace: {workspaceId}</div>
-            <div className="module-card__actions">
+        <div className="card-base" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <div style={{ fontSize: '1.5rem', background: 'rgba(255,255,255,0.05)', padding: '8px', borderRadius: '8px' }}>
+                    {icon}
+                </div>
+                <div>
+                    <h3 style={{ fontSize: '1.1rem', marginBottom: '2px' }}>{moduleName}</h3>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>Workspace: {workspaceId}</div>
+                </div>
+            </div>
+            
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '6px', marginTop: 'auto' }}>
                 {CRUD_ACTIONS.map((action) => {
                     const meta = ACTION_META[action];
                     const granted = grantedActions.includes(action);
                     return (
-                        <span
-                            key={action}
-                            className={`action-pill ${granted ? 'action-pill--granted' : 'action-pill--denied'}`}
-                            style={granted ? { '--pill-color': meta.color } as React.CSSProperties : undefined}
-                        >
-                            {meta.icon} {meta.label}
-                        </span>
+                        <div key={action} style={{ 
+                            display: 'flex', 
+                            justifyContent: 'space-between', 
+                            alignItems: 'center', 
+                            padding: '6px 10px', 
+                            background: 'rgba(0,0,0,0.2)', 
+                            borderRadius: '4px' 
+                        }}>
+                            <code style={{ background: 'transparent', padding: 0 }}>{action}</code>
+                            <span 
+                                style={{
+                                    fontSize: '0.65rem', fontWeight: 700, textTransform: 'uppercase', 
+                                    padding: '2px 6px', borderRadius: '4px', border: '1px solid transparent',
+                                    ...(granted ? {
+                                        background: 'rgba(0,255,150,0.1)', color: 'var(--success)', borderColor: 'rgba(0,255,150,0.1)'
+                                    } : {
+                                        background: 'rgba(255,50,50,0.1)', color: 'var(--error)', borderColor: 'rgba(255,50,50,0.1)'
+                                    })
+                                }}
+                            >
+                                {granted ? 'YES' : 'NO'}
+                            </span>
+                        </div>
                     );
                 })}
             </div>
@@ -68,8 +90,6 @@ function ModuleCard({ moduleId, moduleName, icon, workspaceId, grantedActions }:
 }
 
 // ─── Workspace Modules Renderer ──────────────────────────────────────────
-// Runs INSIDE ZanzoProvider to access useZanzo()
-
 function WorkspaceModules({ workspaceId }: { workspaceId: string }) {
     const { can } = useZanzo<typeof schema>();
 
@@ -78,28 +98,25 @@ function WorkspaceModules({ workspaceId }: { workspaceId: string }) {
     const accessibleModules = moduleIds
         .map((modId) => {
             const moduleRef = `Module:${workspaceId}_${modId}` as const;
-            // Check each CRUD action independently (O(1) in client)
             const grantedActions = CRUD_ACTIONS.filter((action) => can(action, moduleRef as `Module:${string}`));
             return { modId, grantedActions };
         })
-        // Only show modules where the user has at least 'read'
         .filter(({ grantedActions }) => grantedActions.includes('read'));
 
     if (accessibleModules.length === 0) {
         return (
-            <div className="empty-state fade-in">
-                <div className="empty-state__icon">🔒</div>
-                <div className="empty-state__title">Sin acceso</div>
-                <div className="empty-state__subtitle">
-                    No tienes permisos para ver módulos en este workspace.
-                    Contacta al administrador para solicitar acceso.
-                </div>
+            <div className="card-base" style={{ padding: '3rem', textAlign: 'center', borderColor: 'var(--error)' }}>
+                <div style={{ fontSize: '2rem', marginBottom: '1rem' }}>🔒</div>
+                <h3>Access Restricted</h3>
+                <p style={{ color: 'var(--text-dim)', marginTop: '0.5rem' }}>
+                    You have no structural relationships granting access to modules in this workspace.
+                </p>
             </div>
         );
     }
 
     return (
-        <div className="modules-grid">
+        <div className="grid-cols">
             {accessibleModules.map(({ modId, grantedActions }) => {
                 const def = MODULE_DEFS[modId] ?? { name: modId, icon: '📦' };
                 return (
@@ -118,7 +135,6 @@ function WorkspaceModules({ workspaceId }: { workspaceId: string }) {
 }
 
 // ─── Grant Access Component ─────────────────────────────────────────────
-
 function GrantAccess({ onGrant }: { onGrant: () => void }) {
     const [targetUser, setTargetUser] = useState('bob');
     const [targetResource, setTargetResource] = useState('Module:ws1_facturacion');
@@ -141,34 +157,35 @@ function GrantAccess({ onGrant }: { onGrant: () => void }) {
             });
             const data = await res.json();
             if (res.ok) {
-                setResult({ type: 'success', message: `¡Éxito! Se insertaron ${data.inserted} tuplas (base + derivadas).` });
+                setResult({ type: 'success', message: `Engine loaded ${data.inserted} tuples!` });
                 onGrant();
             } else {
-                setResult({ type: 'error', message: data.error || 'Error desconocido' });
+                setResult({ type: 'error', message: data.error || 'Network error' });
             }
         } catch (err) {
-            setResult({ type: 'error', message: 'Error de red' });
+            setResult({ type: 'error', message: 'Network error' });
         } finally {
             setLoading(false);
         }
     };
 
     return (
-        <div className="grant-panel">
-            <div className="grant-form">
-                <div className="form-group">
-                    <label className="form-label">Asignar a</label>
-                    <select className="form-input" value={targetUser} onChange={(e) => setTargetUser(e.target.value)}>
+        <div className="card-base" style={{ padding: '1.5rem', marginTop: '1.5rem' }}>
+            <h3 style={{ marginBottom: '1rem', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.5rem' }}>Entity Mutations</h3>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr auto', gap: '1rem', alignItems: 'end' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-ghost)', textTransform: 'uppercase' }}>Assign To</label>
+                    <select style={{ background: 'var(--bg-app)', border: '1px solid var(--border-subtle)', color: 'var(--text-main)', padding: '8px', borderRadius: '4px' }} value={targetUser} onChange={(e) => setTargetUser(e.target.value)}>
                         {USERS.map(u => <option key={u.id} value={u.id}>{u.label}</option>)}
                     </select>
                 </div>
-                <div className="form-group">
-                    <label className="form-label">Recurso (Materializable)</label>
-                    <select className="form-input" value={targetResource} onChange={(e) => setTargetResource(e.target.value)}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-ghost)', textTransform: 'uppercase' }}>Target Resource</label>
+                    <select style={{ background: 'var(--bg-app)', border: '1px solid var(--border-subtle)', color: 'var(--text-main)', padding: '8px', borderRadius: '4px' }} value={targetResource} onChange={(e) => setTargetResource(e.target.value)}>
                         <optgroup label="Workspaces">
                             {WORKSPACES.map(ws => <option key={ws.id} value={`Workspace:${ws.id}`}>{ws.name}</option>)}
                         </optgroup>
-                        <optgroup label="Módulos (Directos)">
+                        <optgroup label="Modules">
                             {WORKSPACES.map(ws => 
                                 ['facturacion', 'rrhh', 'reportes'].map(m => (
                                     <option key={`${ws.id}_${m}`} value={`Module:${ws.id}_${m}`}>
@@ -179,9 +196,9 @@ function GrantAccess({ onGrant }: { onGrant: () => void }) {
                         </optgroup>
                     </select>
                 </div>
-                <div className="form-group">
-                    <label className="form-label">Rol / Relación</label>
-                    <select className="form-input" value={targetRole} onChange={(e) => setTargetRole(e.target.value)}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <label style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-ghost)', textTransform: 'uppercase' }}>Relationship</label>
+                    <select style={{ background: 'var(--bg-app)', border: '1px solid var(--border-subtle)', color: 'var(--text-main)', padding: '8px', borderRadius: '4px' }} value={targetRole} onChange={(e) => setTargetRole(e.target.value)}>
                         <option value="manager">Manager (Full CRUD)</option>
                         <option value="contributor">Contributor (CRU)</option>
                         <option value="editor">Editor (RU)</option>
@@ -189,12 +206,12 @@ function GrantAccess({ onGrant }: { onGrant: () => void }) {
                         <option value="admin">Admin (Workspace level)</option>
                     </select>
                 </div>
-                <button className="btn-primary" onClick={handleGrant} disabled={loading}>
-                    {loading ? 'Procesando...' : '🛡️ Otorgar Acceso'}
+                <button className="btn-primary" onClick={handleGrant} disabled={loading} style={{ height: '36px' }}>
+                    {loading ? 'Processing...' : 'Write Tuple'}
                 </button>
             </div>
             {result && (
-                <div className={`grant-result grant-result--${result.type}`}>
+                <div style={{ marginTop: '1rem', padding: '12px', borderRadius: '4px', fontSize: '0.85rem', fontWeight: 500, background: result.type === 'success' ? 'rgba(0, 255, 150, 0.1)' : 'rgba(255, 50, 50, 0.1)', color: result.type === 'success' ? 'var(--success)' : 'var(--error)' }}>
                     {result.message}
                 </div>
             )}
@@ -208,7 +225,6 @@ export default function HomePage() {
     const [activeWorkspace, setActiveWorkspace] = useState('ws1');
     const [snapshot, setSnapshot] = useState<Record<string, string[]> | null>(null);
     const [loading, setLoading] = useState(true);
-    const [showGrant, setShowGrant] = useState(false);
 
     const fetchPermissions = useCallback(async (userId: string) => {
         setLoading(true);
@@ -228,93 +244,100 @@ export default function HomePage() {
         fetchPermissions(selectedUser);
     }, [selectedUser, fetchPermissions]);
 
-    const handleUserChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-        setSelectedUser(e.target.value);
-    };
-
     const currentUser = USERS.find((u) => u.id === selectedUser)!;
 
     return (
-        <div className="app-container">
-            {/* ─── Header ─── */}
-            <header className="app-header">
-                <div className="app-header__logo">
-                    🌌 <span>Zanzo</span> Test Portal
-                </div>
-                <div className="app-header__controls">
-                    <div className="user-selector">
-                        <span className="user-selector__label">Usuario</span>
-                        <select
-                            className="user-selector__dropdown"
-                            value={selectedUser}
-                            onChange={handleUserChange}
-                        >
-                            {USERS.map((user) => (
-                                <option key={user.id} value={user.id}>
-                                    {user.label} — {user.role}
-                                </option>
-                            ))}
-                        </select>
+        <div style={{ display: 'flex', height: '100vh', width: '100vw' }}>
+            {/* Sidebar Navigation */}
+            <aside style={{ width: '260px', background: 'oklch(14% 0.01 285)', borderRight: '1px solid var(--border-subtle)', display: 'flex', flexDirection: 'column', padding: '1.5rem 1rem', flexShrink: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '2.5rem' }}>
+                    <div style={{ width: '28px', height: '28px', background: 'var(--accent)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '6px', fontWeight: 700, fontSize: '1rem' }}>
+                        Z
                     </div>
-                </div>
-            </header>
-
-            {/* ─── Main ─── */}
-            <main className="main-content">
-                {/* User badge */}
-                <div className="user-badge fade-in" key={selectedUser}>
-                    <div className={`user-badge__avatar user-badge__avatar--${selectedUser}`}>
-                        {currentUser.label[0]}
-                    </div>
-                    <div className="user-badge__info">
-                        <span className="user-badge__name">{currentUser.label}</span>
-                        <span className="user-badge__role">{currentUser.role}</span>
+                    <div style={{ fontWeight: 600, fontSize: '1rem', color: 'var(--text-main)' }}>
+                        Zanzo<span style={{ color: 'var(--text-ghost)', opacity: 0.5 }}>React</span>
                     </div>
                 </div>
 
-                {/* Workspace tabs */}
-                <div className="workspace-tabs">
-                    {WORKSPACES.map((ws) => (
-                        <button
-                            key={ws.id}
-                            className={`workspace-tab ${activeWorkspace === ws.id ? 'workspace-tab--active' : ''}`}
-                            onClick={() => setActiveWorkspace(ws.id)}
+                <div style={{ fontSize: '0.7rem', fontWeight: 600, textTransform: 'uppercase', color: 'var(--text-ghost)', marginBottom: '0.75rem', letterSpacing: '0.05em' }}>
+                    Simulate Identity
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                    {USERS.map((user) => (
+                        <div 
+                            key={user.id} 
+                            onClick={() => setSelectedUser(user.id)}
+                            style={{ 
+                                padding: '10px 12px', borderRadius: '6px', cursor: 'pointer', transition: 'all 0.2s',
+                                border: '1px solid transparent',
+                                ...(selectedUser === user.id ? {
+                                    background: 'rgba(255, 255, 255, 0.08)', borderColor: 'var(--border-bright)'
+                                } : {
+                                    background: 'transparent'
+                                })
+                            }}
                         >
-                            {ws.name}
-                        </button>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
+                                <span style={{ fontWeight: selectedUser === user.id ? 600 : 500, color: 'var(--text-main)' }}>{user.label}</span>
+                                {selectedUser === user.id && <span style={{ width: '6px', height: '6px', background: 'var(--success)', borderRadius: '50%', boxShadow: '0 0 8px var(--success)' }}></span>}
+                            </div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>{user.role}</div>
+                        </div>
                     ))}
                 </div>
 
-                {/* Module content */}
-                {loading ? (
-                    <div className="loading">
-                        <div className="loading__spinner" />
-                    </div>
-                ) : snapshot ? (
-                    <ZanzoProvider snapshot={snapshot} key={`${selectedUser}-${activeWorkspace}`}>
-                        <Suspense fallback={
-                            <div className="loading">
-                                <div className="loading__spinner" />
-                            </div>
-                        }>
-                            <WorkspaceModules workspaceId={activeWorkspace} />
-                        </Suspense>
-                    </ZanzoProvider>
-                ) : null}
-
-                {/* ─── Access Management Section ─── */}
-                <div className="access-header">
-                    <h2 className="access-header__title">
-                        <span className="access-header__icon">🛡️</span> Gestión de Accesos (Demo)
-                    </h2>
-                    <button className="btn-primary" onClick={() => setShowGrant(!showGrant)}>
-                        {showGrant ? 'Ocultar Panel' : 'Nuevo Permiso'}
-                    </button>
+                <div style={{ marginTop: 'auto', paddingTop: '1rem', borderTop: '1px solid var(--border-subtle)', fontSize: '0.75rem', color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ width: '6px', height: '6px', background: 'var(--success)', borderRadius: '50%', boxShadow: '0 0 8px var(--success)' }}></span>
+                    Engine: Active & Connected
                 </div>
+            </aside>
 
-                {showGrant && (
-                    <GrantAccess onGrant={() => fetchPermissions(selectedUser)} />
-                )}
+            {/* Main Content Area */}
+            <main style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                <header style={{ height: '60px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 2rem', background: 'rgba(12, 12, 12, 0.5)', backdropFilter: 'blur(8px)', flexShrink: 0 }}>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                        {WORKSPACES.map((ws) => (
+                            <button
+                                key={ws.id}
+                                onClick={() => setActiveWorkspace(ws.id)}
+                                style={{
+                                    padding: '6px 12px', borderRadius: '4px', fontSize: '0.85rem', fontWeight: 500, border: 'none', cursor: 'pointer',
+                                    transition: 'all 0.2s ease',
+                                    ...(activeWorkspace === ws.id ? {
+                                        background: 'var(--accent)', color: 'white'
+                                    } : {
+                                        background: 'transparent', color: 'var(--text-dim)'
+                                    })
+                                }}
+                            >
+                                {ws.name}
+                            </button>
+                        ))}
+                    </div>
+                </header>
+
+                <div style={{ flexGrow: 1, overflowY: 'auto', padding: '2.5rem' }}>
+                    <div style={{ maxWidth: '1000px', margin: '0 auto' }}>
+                        <div style={{ marginBottom: '2rem' }}>
+                            <h1 style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>Module Permissions</h1>
+                            <p style={{ color: 'var(--text-dim)', fontSize: '0.875rem' }}>Full reactive CRUD evaluation powered by Drizzle ORM and Zanzo Engine.</p>
+                        </div>
+
+                        {loading ? (
+                            <div className="card-base" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-ghost)' }}>
+                                Fetching exact capabilities...
+                            </div>
+                        ) : snapshot ? (
+                            <ZanzoProvider snapshot={snapshot} key={`${selectedUser}-${activeWorkspace}`}>
+                                <Suspense fallback={<div className="card-base" style={{ padding: '3rem', textAlign: 'center' }}>Hydrating Engine...</div>}>
+                                    <WorkspaceModules workspaceId={activeWorkspace} />
+                                </Suspense>
+                            </ZanzoProvider>
+                        ) : null}
+
+                        <GrantAccess onGrant={() => fetchPermissions(selectedUser)} />
+                    </div>
+                </div>
             </main>
         </div>
     );

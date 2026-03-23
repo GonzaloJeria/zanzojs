@@ -4,9 +4,14 @@
 [![TypeScript Strict](https://img.shields.io/badge/TypeScript-Strict-blue.svg?style=flat-square)](https://www.typescriptlang.org)
 [![Edge Compatible](https://img.shields.io/badge/edge-compatible-success.svg?style=flat-square)](https://vercel.com/docs/concepts/functions/edge-functions)
 
-The core engine of the ZanzoJS ReBAC ecosystem. 0 dependencies, strictly typed, edge-compatible.
+The core engine of the ZanzoJS ReBAC ecosystem. 0 dependencies, strictly typed, 100% isomorphic.
 
-ZanzoJS implements the [Google Zanzibar](https://research.google/pubs/pub48190/) pattern for TypeScript: define your permission model once as a schema, store relationships as tuples in your database, and evaluate permissions at request time with zero network overhead on the frontend.
+## 🚀 Edge & Cloudflare Ready
+ZanzoJS is designed from the ground up to run in modern Edge Runtimes (Cloudflare Workers, Vercel Edge, etc.). It does not rely on any Node.js-specific APIs (`fs`, `path`, `Buffer`, `process`), making it the perfect choice for high-performance, low-latency authorization.
+
+- **Isomorphic Core**: Same code runs in Node.js, the Browser, and the Edge.
+- **Cloudflare D1 Support**: Optimized for D1 with zero-config database adapters.
+- **Example**: Check out [examples/nextjs-d1](https://github.com/GonzaloJeria/zanzo/tree/main/examples/nextjs-d1) for a full-stack Cloudflare implementation.
 
 ## How it works
 ```

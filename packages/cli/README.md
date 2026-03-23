@@ -7,8 +7,14 @@ The official CLI for ZanzoJS. Scaffolds your project with the correct boilerplat
 No installation needed:
 ```bash
 npx @zanzojs/cli@latest init    # Scaffold a new project
-npx @zanzojs/cli@latest check   # Lint and validate your schema
+npx @zanzojs/cli@latest check   # Lint, validate schema AND verify AST complexity
 ```
+
+### `zanzo check` — The Security Linter
+Beyond basic syntax, `check` performs advanced static analysis on your schema:
+- **Circular Dependency Detection**: Prevents infinite loops in permission paths.
+- **AST Complexity Validation**: **(New)** Ensures no permission path generates more than 100 conditional branches. This is crucial for stability in Edge Runtimes (Cloudflare) where CPU limits are strict.
+- **Dead Code Detection**: Identifies unreferenced entities or unused relations.
 
 Or install globally:
 ```bash

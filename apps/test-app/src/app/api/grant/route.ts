@@ -14,6 +14,12 @@ import { eq, and } from 'drizzle-orm';
 export async function POST(request: NextRequest) {
   const body = await request.json();
   const { subject, relation, object } = body;
+  const adminId = request.headers.get('x-admin-id') || 'alice'; // Mock admin check
+
+  // REAL-WORLD REBAC TIP:
+  // Before granting, you should check if the CURRENT user is authorized to manage this resource.
+  // const isAuthorized = await engine.for(`User:${adminId}`).can('admin').on(object);
+  // if (!isAuthorized) return NextResponse.json({ error: 'Unauthorized to manage permissions' }, { status: 403 });
 
   if (!subject || !relation || !object) {
     return NextResponse.json(
@@ -25,30 +31,30 @@ export async function POST(request: NextRequest) {
   const baseTuple = { subject, relation, object };
 
   try {
-    const result = await db.transaction(async (tx) => {
-      // 1. Calculate derivations using the transaction instance for fetchChildren
-      const derived = await materializeDerivedTuples({
-        schema: engine.getSchema(),
-        newTuple: baseTuple,
-        fetchChildren: async (parent, rel) => {
-          const rows = tx
-            .select({ object: zanzoTuples.object })
-            .from(zanzoTuples)
-            .where(
-              and(
-                eq(zanzoTuples.subject, parent),
-                eq(zanzoTuples.relation, rel),
-              ),
-            )
-            .all();
-          return rows.map((r) => r.object);
-        },
-      });
+    // 1. Calculate derivations OUTSIDE the transaction
+    // (materializeDerivedTuples is async, but better-sqlite3 transactions are sync)
+    const derived = await materializeDerivedTuples({
+      schema: engine.getSchema(),
+      newTuple: baseTuple,
+      fetchChildren: async (parent, rel) => {
+        // We use the standard 'db' instance here as it's safe for reads in SQLite
+        const rows = db
+          .select({ object: zanzoTuples.object })
+          .from(zanzoTuples)
+          .where(
+            and(
+              eq(zanzoTuples.subject, parent),
+              eq(zanzoTuples.relation, rel),
+            ),
+          )
+          .all();
+        return rows.map((r) => r.object);
+      },
+    });
 
-      // 2. Deduplicate to prevent unique constraint failures
+    // 2. Open a synchronous transaction for writes
+    const result = db.transaction((tx) => {
       const allToInsert = deduplicateTuples([baseTuple, ...derived]);
-
-      // 3. Batch insert
       tx.insert(zanzoTuples).values(allToInsert).onConflictDoNothing().run();
 
       return {

@@ -18,6 +18,84 @@ const documents = sqliteTable('documents', {
   workspaceId: text('workspace_id'),
 });
 
+describe('Audit 1: Direct Ownership Efficiency', () => {
+  let engine: ZanzoEngine<any>;
+  const dialect = new SQLiteSyncDialect();
+
+  beforeEach(() => {
+    const schema = new ZanzoBuilder()
+      .entity('Document', {
+        actions: ['read'],
+        relations: { owner: 'User' },
+        permissions: { read: ['owner'] }
+      })
+      .entity('User', { actions: [], relations: {} })
+      .build();
+    engine = new ZanzoEngine(schema);
+  });
+
+  it('generates a simple EXISTS for direct ownership', () => {
+    const authz = createZanzoAdapter(engine, zanzoTuples);
+    const filter = authz('User:alice', 'read', 'Document', documents.id);
+    const { sql: rawSql, params } = dialect.sqlToQuery(filter as any);
+
+    expect(rawSql).toContain('EXISTS');
+    expect(rawSql).toContain('"relation" = ?');
+    expect(params).toContain('owner');
+    expect(params).toContain('User:alice');
+  });
+
+  it('supports multiple direct relations via IN clause', () => {
+    const schema = new ZanzoBuilder()
+      .entity('Document', {
+        actions: ['read'],
+        relations: { owner: 'User', editor: 'User' },
+        permissions: { read: ['owner', 'editor'] }
+      })
+      .entity('User', { actions: [], relations: {} })
+      .build();
+    const engine2 = new ZanzoEngine(schema);
+    const authz = createZanzoAdapter(engine2, zanzoTuples);
+    const filter = authz('User:alice', 'read', 'Document', documents.id);
+    const { sql: rawSql, params } = dialect.sqlToQuery(filter as any);
+
+    expect(rawSql).toContain('IN (?, ?)');
+    expect(params).toContain('owner');
+    expect(params).toContain('editor');
+  });
+});
+
+describe('Audit 2: Zero-Config Validation', () => {
+  let engine: ZanzoEngine<any>;
+  const dialect = new SQLiteSyncDialect();
+
+  beforeEach(() => {
+    const schema = new ZanzoBuilder()
+      .entity('Document', {
+        actions: ['read'],
+        relations: { owner: 'User' },
+        permissions: { read: ['owner'] }
+      })
+      .entity('User', { actions: [], relations: {} })
+      .build();
+    engine = new ZanzoEngine(schema);
+  });
+
+  it('rejects unknown actions with a blocker condition (1 = 0)', () => {
+    const authz = createZanzoAdapter(engine, zanzoTuples);
+    const filter = authz('User:alice', 'delete' as any, 'Document' as any, documents.id);
+    const { sql: rawSql } = dialect.sqlToQuery(filter as any);
+    expect(rawSql).toContain('1 = 0');
+  });
+
+  it('rejects unknown resource types with a blocker condition (1 = 0)', () => {
+    const authz = createZanzoAdapter(engine, zanzoTuples);
+    const filter = authz('User:alice', 'read' as any, 'Other' as any, documents.id);
+    const { sql: rawSql } = dialect.sqlToQuery(filter as any);
+    expect(rawSql).toContain('1 = 0');
+  });
+});
+
 describe('Audit 3: Drizzle Adapter Efficiency', () => {
   let engine: ZanzoEngine<any>;
   const dialect = new SQLiteSyncDialect();

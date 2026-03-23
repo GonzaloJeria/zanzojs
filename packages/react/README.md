@@ -57,6 +57,24 @@ export async function getUserSnapshot(userId: string) {
 
 > **Never reuse the engine across requests.** A shared engine would accumulate tuples from multiple users. Always instantiate a new `ZanzoEngine` per request.
 
+### 🚀 Next.js Edge Runtime & Cloudflare D1
+When using Next.js on the Edge (Cloudflare Pages), ensure you initialize your database adapter with `dialect: 'sqlite'`.
+
+```typescript
+// app/layout.tsx (Server Component)
+export const runtime = 'edge';
+
+export default async function Layout({ children }) {
+  const { env } = getRequestContext();
+  const db = drizzle(env.DB);
+  
+  // withPermissions is already configured with dialect: 'sqlite'
+  const tuples = await db.select().from(zanzoTuples).where(...);
+  // ... generate snapshot
+}
+```
+Check the [Next.js + D1 Example](https://github.com/GonzaloJeria/zanzo/tree/main/examples/nextjs-d1) for a complete implementation.
+
 ### 2. Wrap your app with ZanzoProvider
 ```tsx
 'use client';

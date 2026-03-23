@@ -56,14 +56,20 @@ export function createZanzoAdapter<TSchema extends SchemaData, TTable extends Za
   options?: ZanzoAdapterOptions
 ) {
   // Smart default: auto-enable warnings in development unless explicitly configured
-  const isDev = typeof process !== 'undefined' && process.env?.NODE_ENV === 'development';
+  const isDev = typeof process !== 'undefined' && !!process.env && process.env.NODE_ENV === 'development';
   const shouldWarn = options?.warnOnNestedConditions ?? isDev;
   const isDebug = options?.debug ?? false;
   const dialect = options?.dialect ?? 'postgres';
 
-  // Performance Optimization: Cache structural ASTs per action+resourceType
-  // The actor is NOT part of the key as it varies per request, but the logical 
-  // permission tree (AST) for a given action on a resource type is static.
+  // Performance Optimization: Cache structural ASTs per action+resourceType.
+  // The cache stores the structural shape of the AST (relations, paths, operator)
+  // which is static for a given action+resourceType combination.
+  //
+  // SECURITY (v0.3.0 fix): The `targetSubject` stored inside cached AST conditions
+  // is IGNORED during SQL generation. The actual actor is always injected from the
+  // current invocation's `actor` argument. This prevents cross-user data leakage
+  // when the adapter instance is shared across requests in persistent servers
+  // (Express, Fastify, etc.). See: architectural_review.md §CRÍTICO drizzle.
   const astCache = new Map<string, QueryAST | null>();
 
   /**
@@ -82,21 +88,17 @@ export function createZanzoAdapter<TSchema extends SchemaData, TTable extends Za
     resourceIdColumn: AnyColumn
   ): SQL<unknown> {
     
-    // Check Cache first
+    // Cache key is structural: action + resourceType (actor is NOT included).
+    // The AST structure (which relations grant which actions) is immutable per schema.
     const cacheKey = `${action as string}:${resourceType as string}`;
     let ast = astCache.get(cacheKey);
 
     if (ast === undefined) {
-      // Evaluate the underlying pure logical AST
-      // We use a dummy actor for the initial build to get the structural conditions,
-      // then we'll replace the targetSubject with the real actor if needed.
-      // Actually, buildDatabaseQuery uses the actor in the conditions.
+      // Build the structural AST. The actor passed here is irrelevant for the cached
+      // structure — only the relations and their types matter. The targetSubject baked
+      // into the AST conditions will be ignored during SQL generation below.
       ast = engine.buildDatabaseQuery(actor, action as any, resourceType as any);
       astCache.set(cacheKey, ast);
-    } else if (ast) {
-        // If we have a cached AST, we must update the targetSubject for the current actor
-        // Since we are rebuilding the SQL conditions anyway, we can just use the actor 
-        // from the function arguments.
     }
 
     if (isDebug) {
@@ -133,13 +135,15 @@ export function createZanzoAdapter<TSchema extends SchemaData, TTable extends Za
         console.warn(`[Zanzo] Nested permission path detected: '${fullRelation}'. The SQL adapter resolves this via pre-materialized tuples. Ensure you used materializeDerivedTuples() when writing this relationship to the database. See: https://zanzo.dev/docs/tuple-expansion`);
       }
 
-      // Use the actual actor from arguments to ensure correctness even with cached AST
-      const targetSubject = cond.targetSubject === actor ? actor : cond.targetSubject;
-
-      let relations = relationsBySubject.get(targetSubject);
+      // SECURITY FIX: Always use the `actor` from the current invocation, NEVER
+      // `cond.targetSubject` from the cached AST. The cached AST may contain a
+      // stale actor from a previous request. This is the core of the cross-user
+      // data leakage fix — the actor is bound at SQL generation time, not at
+      // AST construction time.
+      let relations = relationsBySubject.get(actor);
       if (!relations) {
         relations = new Set();
-        relationsBySubject.set(targetSubject, relations);
+        relationsBySubject.set(actor, relations);
       }
       relations.add(fullRelation);
     }

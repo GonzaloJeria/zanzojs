@@ -6,6 +6,7 @@ import { ZanzoError, ZanzoErrorCode } from '../errors';
 import type { CheckResult, TraceStep } from './trace';
 import { PermissionCache } from './cache';
 import type { CacheOptions } from './cache';
+import type { ZanzoExtension } from '../extensions/index';
 
 /**
  * Represents a logical ReBAC relational tuple binding a Subject to an Object via a Relation.
@@ -115,6 +116,8 @@ export class ZanzoEngine<TSchema extends SchemaData> {
    *
    * @note The default `invalidationType: 'selective'` is backwards-compatible and optimizes cache
    * clearing by ensuring security is never broken while retaining unaffected entries.
+   * If the cache size exceeds `selectiveThreshold` (default 1000), it automatically falls back
+   * to a full clear to prevent O(N*DFS) performance degradation.
    * If you need to reproduce the strict deterministic full-clear behavior of v0.3.0,
    * pass `invalidationType: 'full'`.
    *
@@ -229,6 +232,18 @@ export class ZanzoEngine<TSchema extends SchemaData> {
    * engine.for('User:alice').listAccessible('Document')
    */
   public for<TActor extends SchemaEntityRef<TSchema> & string>(actor: TActor): ForBuilder<TSchema> {
+    this.validateInput(actor, 'actor');
+    return new ForBuilder(this, actor);
+  }
+
+  /**
+   * Starts a fluent permission check for any actor string, bypassing schema validation.
+   * This is intended for internal use by adapters (e.g. Angular) that create synthetic actors 
+   * or use pre-filtered snapshots.
+   *
+   * @internal For adapter use only.
+   */
+  public forAny(actor: string): ForBuilder<TSchema> {
     this.validateInput(actor, 'actor');
     return new ForBuilder(this, actor);
   }
@@ -357,6 +372,18 @@ export class ZanzoEngine<TSchema extends SchemaData> {
     if (isLargeBatch && loadedCount > 0) {
       this.cache?.invalidate();
     }
+  }
+
+  /**
+   * Hydrates the engine with capabilities dynamically declared on frontend components.
+   * These extensions are transformed into memory tuples allowing `can()` evaluations to resolve locally.
+   * 
+   * @param extensions ZanzoExtension instance containing capabilities per entity.
+   * @param relation The base relation mapping the entity instance to the capability object (e.g. 'module')
+   */
+  public loadExtensions(extensions: ZanzoExtension<any>, relation: string = 'module'): void {
+    const extensionTuples = extensions.toTuples(relation) as RelationTuple[];
+    this.load(extensionTuples);
   }
 
   /**
