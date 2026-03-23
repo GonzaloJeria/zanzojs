@@ -19,6 +19,33 @@ import type { AgentType } from '../generators/agent-context';
 export async function initCommand(): Promise<void> {
   p.intro(pc.bgCyan(pc.black(' 🌌 Welcome to ZanzoJS ')));
 
+  const projectNameInput = await p.text({
+    message: 'What is your project named? (Leave blank to use current directory)',
+    placeholder: 'my-zanzo-app',
+  });
+
+  if (p.isCancel(projectNameInput)) { p.cancel('Setup cancelled.'); process.exit(0); }
+
+  const projectName = (projectNameInput as string).trim();
+  if (projectName !== '') {
+    const projectPath = path.resolve(projectName);
+    if (!fs.existsSync(projectPath)) {
+      fs.mkdirSync(projectPath, { recursive: true });
+    }
+    process.chdir(projectPath);
+  }
+
+  const topology = await p.select({
+    message: 'What type of application are you building?',
+    options: [
+      { value: 'fullstack', label: 'Fullstack (Next.js, SSR, Remix)' },
+      { value: 'backend', label: 'Backend / API Only (Express, Hono, NestJS)' },
+      { value: 'frontend', label: 'Frontend Only (React SPA, Angular SPA)' },
+    ],
+  });
+
+  if (p.isCancel(topology)) { p.cancel('Setup cancelled.'); process.exit(0); }
+
   const framework = await p.select<{ value: FrameworkType; label: string }[], FrameworkType>({
     message: 'Which framework are you using?',
     options: [
@@ -30,37 +57,24 @@ export async function initCommand(): Promise<void> {
     ],
   });
 
-  if (p.isCancel(framework)) {
-    p.cancel('Setup cancelled.');
-    process.exit(0);
-  }
+  if (p.isCancel(framework)) { p.cancel('Setup cancelled.'); process.exit(0); }
 
-  // --- New: Project Initialization Support ---
   if (!fs.existsSync(path.resolve('package.json'))) {
     const initProject = await p.confirm({
       message: `No package.json found. Initialize a new ${framework} project here?`,
       initialValue: true,
     });
-
-    if (p.isCancel(initProject)) {
-      p.cancel('Setup cancelled.');
-      process.exit(0);
-    }
+    if (p.isCancel(initProject)) { p.cancel('Setup cancelled.'); process.exit(0); }
 
     if (initProject) {
       const s = p.spinner();
-
-      // Check if directory is empty (ignoring hidden files is not enough for CNA)
       const files = fs.readdirSync('.');
       if (files.length > 0) {
         const proceed = await p.confirm({
-          message: pc.yellow(`Directory is not empty (${files.length} items found). Procced anyway? (Likely to fail if using Next.js)`),
+          message: pc.yellow(`Directory is not empty (${files.length} items found). Proceed anyway? (Likely to fail if using Next.js)`),
           initialValue: false,
         });
-        if (!proceed) {
-          p.cancel('Setup cancelled. Please use an empty directory.');
-          process.exit(0);
-        }
+        if (!proceed) { p.cancel('Setup cancelled. Please use an empty directory.'); process.exit(0); }
       }
 
       s.start(`Initializing ${framework} project...`);
@@ -86,37 +100,32 @@ export async function initCommand(): Promise<void> {
         s.stop('Manual initialization might be required.');
         const message = err instanceof Error ? (err as any).stderr?.toString() || err.message : String(err);
         p.log.error(`Failed to initialize project: ${message}`);
-        p.log.info('Check if the directory is empty or if you have pnpm/npx installed.');
       }
     }
   }
-  // ----------------------------------------
 
-  const _orm = await p.select({
-    message: 'Which ORM are you using?',
-    options: [
-      { value: 'drizzle', label: 'Drizzle' },
-      { value: 'none', label: 'None' },
-    ],
-  });
+  let _orm = 'none';
+  let database = 'sqlite';
 
-  if (p.isCancel(_orm)) {
-    p.cancel('Setup cancelled.');
-    process.exit(0);
-  }
+  if (topology !== 'frontend') {
+    _orm = await p.select({
+      message: 'Which ORM are you using?',
+      options: [
+        { value: 'drizzle', label: 'Drizzle' },
+        { value: 'none', label: 'None' },
+      ],
+    }) as string;
+    if (p.isCancel(_orm)) { p.cancel('Setup cancelled.'); process.exit(0); }
 
-  const database = await p.select<{ value: DatabaseType; label: string }[], DatabaseType>({
-    message: 'Which database are you using?',
-    options: [
-      { value: 'postgresql', label: 'PostgreSQL' },
-      { value: 'sqlite', label: 'SQLite / Cloudflare D1' },
-      { value: 'mysql', label: 'MySQL' },
-    ],
-  });
-
-  if (p.isCancel(database)) {
-    p.cancel('Setup cancelled.');
-    process.exit(0);
+    database = await p.select<{ value: DatabaseType; label: string }[], DatabaseType>({
+      message: 'Which database are you using?',
+      options: [
+        { value: 'postgresql', label: 'PostgreSQL' },
+        { value: 'sqlite', label: 'SQLite / Cloudflare D1' },
+        { value: 'mysql', label: 'MySQL' },
+      ],
+    }) as string;
+    if (p.isCancel(database)) { p.cancel('Setup cancelled.'); process.exit(0); }
   }
 
   const agent = await p.select<{ value: AgentType; label: string }[], AgentType>({
@@ -130,25 +139,39 @@ export async function initCommand(): Promise<void> {
       { value: 'none', label: 'None' },
     ],
   });
+  if (p.isCancel(agent)) { p.cancel('Setup cancelled.'); process.exit(0); }
 
-  if (p.isCancel(agent)) {
-    p.cancel('Setup cancelled.');
-    process.exit(0);
-  }
+  let selectedTemplate: string | string[] = 'b2b';
 
-  const entitiesInput = await p.text({
-    message: 'What entities do you need? (comma separated, e.g. User,Organization,Project)',
-    placeholder: 'User, Organization, Project',
-    defaultValue: 'User, Organization, Project',
-    validate(value) {
-      if (!value.trim()) return 'Please enter at least one entity.';
-      return undefined;
-    },
-  });
+  if (topology !== 'frontend') {
+    const templateChoice = await p.select({
+      message: 'Which permission model describes your application best?',
+      options: [
+        { value: 'b2b', label: 'B2B SaaS (Workspace, Document, User)' },
+        { value: 'social', label: 'Social Media (Group, Post, User)' },
+        { value: 'rbac', label: 'Simple RBAC (Feature, SystemRole, User)' },
+        { value: 'custom', label: 'Custom (Define my own entities)' },
+      ],
+    });
+    if (p.isCancel(templateChoice)) { p.cancel('Setup cancelled.'); process.exit(0); }
 
-  if (p.isCancel(entitiesInput)) {
-    p.cancel('Setup cancelled.');
-    process.exit(0);
+    if (templateChoice === 'custom') {
+      const entitiesInput = await p.text({
+        message: 'What entities do you need? (comma separated, e.g. User,Organization,Project)',
+        placeholder: 'User, Organization, Project',
+        defaultValue: 'User, Organization, Project',
+        validate(value) {
+          if (!value.trim()) return 'Please enter at least one entity.';
+          return undefined;
+        },
+      });
+      if (p.isCancel(entitiesInput)) { p.cancel('Setup cancelled.'); process.exit(0); }
+      selectedTemplate = (entitiesInput as string).split(',').map(e => e.trim()).filter(e => e.length > 0);
+    } else {
+      selectedTemplate = templateChoice as string;
+    }
+  } else {
+    selectedTemplate = 'b2b';
   }
 
   const outputDir = await p.text({
@@ -156,16 +179,7 @@ export async function initCommand(): Promise<void> {
     placeholder: 'src/',
     defaultValue: 'src/',
   });
-
-  if (p.isCancel(outputDir)) {
-    p.cancel('Setup cancelled.');
-    process.exit(0);
-  }
-
-  const entities = (entitiesInput as string)
-    .split(',')
-    .map((e: string) => e.trim())
-    .filter((e: string) => e.length > 0);
+  if (p.isCancel(outputDir)) { p.cancel('Setup cancelled.'); process.exit(0); }
 
   const s = p.spinner();
   const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -173,70 +187,70 @@ export async function initCommand(): Promise<void> {
   s.start('Generating ZanzoJS core files...');
   await sleep(600);
 
-  // 1. Schema
   s.message('Building your ReBAC schema...');
-  await generateSchema(entities as string[], outputDir as string);
+  await generateSchema(selectedTemplate, outputDir as string);
   await sleep(400);
 
-  // 2. Migration
-  s.message('Creating database migration...');
-  await generateMigration(database as DatabaseType);
-  await sleep(400);
+  if (topology !== 'frontend') {
+    s.message('Creating database migration...');
+    await generateMigration(database as DatabaseType);
+    await sleep(400);
 
-  // 3. Routes
-  s.message(`Generating ${framework} API routes...`);
-  await generateRoutes(framework as FrameworkType, outputDir as string);
-  await sleep(400);
+    s.message(`Generating ${framework} API routes...`);
+    await generateRoutes(framework as FrameworkType, outputDir as string);
+    await sleep(400);
+  }
 
-  // 4. Agent context
   s.message('Configuring AI agent context...');
   await generateAgentContext(agent as AgentType);
   await sleep(400);
 
   s.stop(pc.green('Boilerplate generated successfully!'));
 
-  // Next steps summary
-  const migrationCommand = getMigrationCommand(database);
-  const routePaths = getRoutePaths(framework, outputDir);
+  const migrationCommand = getMigrationCommand(database as DatabaseType);
+  const routePaths = getRoutePaths(framework, outputDir as string);
 
-  p.note(
-    [
-      `${pc.bold('ZanzoJS is ready. Next steps:')}`,
-      '',
-      `  1. Run the migration:`,
-      `     ${pc.cyan(migrationCommand)}`,
-      '',
-      `  2. Customize your schema:`,
-      `     ${pc.cyan('zanzo.config.ts')}`,
-      '',
-      `  3. Connect your DB in the API routes:`,
-      ...routePaths.map((r) => `     ${pc.cyan(r)}`),
-      '',
-      `  4. Wrap your app with ZanzoProvider:`,
-      `     Fetch the snapshot server-side and pass it as an object:`,
-      '',
-      `     ${pc.dim('// 1. Fetch snapshot')}`,
-      `     const snapshot = await fetch('/api/permissions?userId=...').then(r => r.json());`,
-      '',
-      `     ${pc.dim('// 2. Pass to provider')}`,
-      `     <ZanzoProvider snapshot={snapshot}>...<\/ZanzoProvider>`,
-      '',
-      `  Docs: ${pc.underline('https://github.com/GonzaloJeria/zanzo')}`,
-    ].join('\n'),
-    'Next Steps'
-  );
+  const steps = [
+    `${pc.bold('ZanzoJS is ready. Next steps:')}`,
+    ''
+  ];
+  if (topology !== 'frontend') {
+    steps.push(`  1. Run the migration:`);
+    steps.push(`     ${pc.cyan(migrationCommand)}`);
+    steps.push('');
+  }
+  steps.push(`  ${topology !== 'frontend' ? '2' : '1'}. Customize your schema:`);
+  steps.push(`     ${pc.cyan('zanzo.config.ts')}`);
+  steps.push('');
+  
+  if (topology !== 'frontend') {
+    steps.push(`  3. Connect your DB in the API routes:`);
+    steps.push(...routePaths.map((r) => `     ${pc.cyan(r)}`));
+    steps.push('');
+    steps.push(`  4. Wrap your app with ZanzoProvider:`);
+  } else {
+    steps.push(`  2. Wrap your app with ZanzoProvider:`);
+  }
+  
+  steps.push(`     Fetch the snapshot server-side and pass it as an object:`);
+  steps.push('');
+  steps.push(`     ${pc.dim('// 1. Fetch snapshot')}`);
+  steps.push(`     const snapshot = await fetch('/api/permissions?userId=...').then(r => r.json());`);
+  steps.push('');
+  steps.push(`     ${pc.dim('// 2. Pass to provider')}`);
+  steps.push(`     <ZanzoProvider snapshot={snapshot}>...<\/ZanzoProvider>`);
+  steps.push('');
+  steps.push(`  Docs: ${pc.underline('https://github.com/GonzaloJeria/zanzo')}`);
 
+  p.note(steps.join('\n'), 'Next Steps');
   p.outro(pc.green('Done! Happy building 🚀'));
 }
 
 function getMigrationCommand(database: DatabaseType): string {
   switch (database) {
-    case 'postgresql':
-      return 'psql -d your_database -f zanzo-migration.sql';
-    case 'sqlite':
-      return 'sqlite3 your.db < zanzo-migration.sql';
-    case 'mysql':
-      return 'mysql -u root -p your_database < zanzo-migration.sql';
+    case 'postgresql': return 'psql -d your_database -f zanzo-migration.sql';
+    case 'sqlite': return 'sqlite3 your.db < zanzo-migration.sql';
+    case 'mysql': return 'mysql -u root -p your_database < zanzo-migration.sql';
   }
 }
 

@@ -1,53 +1,103 @@
 /**
  * Template: zanzo.config.ts
- * Generates a ZanzoJS schema configuration from user-specified entities.
+ * Generates a ZanzoJS schema configuration from predefined templates or custom entities.
  */
 
-export function schemaTemplate(entities: string[]): string {
-  const entityBlocks = entities.map((entity, index) => {
-    if (index === 0) {
-      // First entity: simple, no actions or relations (e.g. User)
+export function schemaTemplate(input: string | string[]): string {
+  if (Array.isArray(input)) {
+    const entityBlocks = input.map((entity, index) => {
+      if (index === 0) return `  .entity('${entity}', { actions: [] as const, relations: {} })`;
+      if (index === 1) {
+        const first = input[0]!;
+        return `  .entity('${entity}', {
+    actions: ['manage'] as const,
+    relations: { admin: '${first}', member: '${first}' },
+    permissions: { manage: ['admin'] }
+  })`;
+      }
+      const first = input[0]!;
+      const second = input[1]!;
       return `  .entity('${entity}', {
+    actions: ['create', 'read', 'update', 'delete'] as const,
+    relations: { ${second.toLowerCase()}: '${second}', manager: '${first}', editor: '${first}', viewer: '${first}' },
+    permissions: {
+      create: ['manager', '${second.toLowerCase()}.admin'],
+      read:   ['manager', 'editor', 'viewer', '${second.toLowerCase()}.admin'],
+      update: ['manager', 'editor', '${second.toLowerCase()}.admin'],
+      delete: ['manager', '${second.toLowerCase()}.admin'],
+    }
+  })`;
+    });
+    return wrapSchema(entityBlocks.join('\n'));
+  }
+
+  switch (input) {
+    case 'b2b':
+      return wrapSchema(`  .entity('User', {
     actions: [] as const,
     relations: {},
-  })`;
-    }
-
-    if (index === 1) {
-      // Second entity: organization-style with manage action
-      const firstEntity = entities[0]!;
-      return `  .entity('${entity}', {
-    actions: ['manage'] as const,
-    relations: {
-      admin: '${firstEntity}',
-      member: '${firstEntity}',
-    },
+  })
+  .entity('Workspace', {
+    actions: ['manage', 'invite'] as const,
+    relations: { owner: 'User', admin: 'User', member: 'User' },
     permissions: {
-      manage: ['admin'],
-    },
-  })`;
+      manage: ['owner'],
+      invite: ['owner', 'admin']
     }
-
-    // Third+ entities: full CRUD with cross-entity relations
-    const firstEntity = entities[0]!;
-    const secondEntity = entities[1]!;
-    return `  .entity('${entity}', {
-    actions: ['create', 'read', 'update', 'delete'] as const,
-    relations: {
-      ${secondEntity.toLowerCase()}: '${secondEntity}',
-      manager: '${firstEntity}',
-      editor: '${firstEntity}',
-      viewer: '${firstEntity}',
-    },
+  })
+  .entity('Document', {
+    actions: ['read', 'edit', 'delete'] as const,
+    relations: { workspace: 'Workspace', viewer: 'User', editor: 'User' },
     permissions: {
-      create: ['manager', '${secondEntity.toLowerCase()}.admin'],
-      read:   ['manager', 'editor', 'viewer', '${secondEntity.toLowerCase()}.admin'],
-      update: ['manager', 'editor', '${secondEntity.toLowerCase()}.admin'],
-      delete: ['manager', '${secondEntity.toLowerCase()}.admin'],
-    },
-  })`;
-  });
+      read: ['viewer', 'editor', 'workspace.member', 'workspace.admin', 'workspace.owner'],
+      edit: ['editor', 'workspace.admin', 'workspace.owner'],
+      delete: ['workspace.owner']
+    }
+  })`);
 
+    case 'social':
+      return wrapSchema(`  .entity('User', {
+    actions: ['manage_account'] as const,
+    relations: { self: 'User' },
+    permissions: { manage_account: ['self'] }
+  })
+  .entity('Group', {
+    actions: ['post', 'moderate'] as const,
+    relations: { admin: 'User', moderator: 'User', member: 'User' },
+    permissions: {
+      post: ['member', 'moderator', 'admin'],
+      moderate: ['moderator', 'admin']
+    }
+  })
+  .entity('Post', {
+    actions: ['view', 'edit', 'delete'] as const,
+    relations: { author: 'User', group: 'Group' },
+    permissions: {
+      view: ['author', 'group.member', 'group.moderator', 'group.admin'],
+      edit: ['author', 'group.moderator', 'group.admin'],
+      delete: ['author', 'group.admin']
+    }
+  })`);
+
+    case 'rbac':
+      return wrapSchema(`  .entity('SystemRole', {
+    actions: ['assume'] as const,
+    relations: { assignee: 'User' },
+    permissions: { assume: ['assignee'] }
+  })
+  .entity('Feature', {
+    actions: ['access'] as const,
+    relations: { required_role: 'SystemRole' },
+    permissions: { access: ['required_role.assignee'] }
+  })
+  .entity('User', { actions: [] as const, relations: {} })`);
+      
+    default:
+      return wrapSchema(`  .entity('Default', { actions: [] as const, relations: {} })`);
+  }
+}
+
+function wrapSchema(blocks: string): string {
   return `import { ZanzoBuilder, ZanzoEngine } from '@zanzojs/core';
 
 /**
@@ -57,7 +107,7 @@ export function schemaTemplate(entities: string[]): string {
  * Docs: https://github.com/GonzaloJeria/zanzo
  */
 export const schema = new ZanzoBuilder()
-${entityBlocks.join('\n')}
+${blocks}
   .build();
 
 // Reuse this instance across all requests for schema access only.

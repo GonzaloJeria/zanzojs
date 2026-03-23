@@ -65,3 +65,6 @@ A continuación se detalla el plan de desarrollo para llegar a la versión compl
 
 - [x] **Fase 21: Cloudflare Edge & D1 Support (v0.x.2)**
   Certificación de compatibilidad total con el stack Next.js + Cloudflare Pages + D1. Hardening del adapter Drizzle para el Edge Runtime, eliminación de dependencias de Node.js en el core, y validación de complejidad de AST en el CLI. Ejemplo funcional completo en `examples/nextjs-d1`.
+
+- [x] **Fase 22: CLI Starter Kits & Topology Architecture (v0.x.3)**
+  Reescritura interactiva del scaffolding del comando `zanzojs init`. Inclusión de pre-validación de rutas/directorios vacíos y separación de Inyección de Dependencias ReBAC por topologías arquitectónicas estrictas (Frontend-only, Backend-only, Fullstack). Adición de Plantillas Mentales Isomorfas pre-construidas (B2B SaaS Multi-tenant, Social Media y Simple RBAC).

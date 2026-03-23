@@ -8,7 +8,7 @@ import * as path from 'node:path';
 import * as p from '@clack/prompts';
 import { schemaTemplate } from '../templates/schema';
 
-export async function generateSchema(entities: string[], _outputDir: string): Promise<string> {
+export async function generateSchema(input: string | string[], _outputDir: string): Promise<string> {
   const filePath = path.resolve('zanzo.config.ts');
 
   if (fs.existsSync(filePath)) {
@@ -22,7 +22,7 @@ export async function generateSchema(entities: string[], _outputDir: string): Pr
     }
   }
 
-  const content = schemaTemplate(entities);
+  const content = schemaTemplate(input);
   fs.writeFileSync(filePath, content, 'utf-8');
   p.log.success('Created zanzo.config.ts');
   return filePath;
