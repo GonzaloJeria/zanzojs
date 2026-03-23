@@ -1,5 +1,11 @@
 # @zanzojs/cli
 
+## 0.3.2
+
+### Patch Changes
+
+- 378f84e: feat(cli): Implement smart directory routing, Framework topologies (Frontend, Backend, Fullstack) and Pre-built Domain Starter Templates (B2B SaaS, Social Media, Simple RBAC).
+
 ## 0.3.1
 
 ### Patch Changes
