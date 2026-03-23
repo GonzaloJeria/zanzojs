@@ -1,5 +1,11 @@
 # @zanzojs/cli
 
+## 0.3.5
+
+### Patch Changes
+
+- d5a16c6: fix(cli): add verbose error logging to the dependency injection phase to diagnose package.json mutation failures.
+
 ## 0.3.4
 
 ### Patch Changes
