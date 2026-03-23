@@ -1,5 +1,11 @@
 # @zanzojs/cli
 
+## 0.3.6
+
+### Patch Changes
+
+- e0b1d64: refactor(cli): modernized routing template scaffolding to emit native @zanzojs/drizzle Adapter abstractions, dropping legacy boilerplate requirements like expandTuples, collapseTuples and manual ZanzoEngine loader declarations.
+
 ## 0.3.5
 
 ### Patch Changes
