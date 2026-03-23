@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
-import { createZanzoAdapter } from '../src/index';
+import { createZanzoAdapter } from '../src/index.js';
 import { ZanzoBuilder, ZanzoEngine, RelationTuple } from '@zanzojs/core';
 import { SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
 
@@ -49,22 +49,36 @@ describe('@zanzo/drizzle Zero-Config Adapter', () => {
     expect(rawSql).toContain('1 = 0');
   });
 
-  it('should translate direct conditions to EXISTS lookups mapped directly to the universal tuples table', () => {
+  it('should translate direct conditions to EXISTS lookups with secure parameterization', () => {
     const authz = createZanzoAdapter(engine, zanzoTuples);
     
-    // Generates the AST -> maps to tupleTable EXISTS clause via string concatenation.
+    // Generates the AST -> maps to tupleTable EXISTS clause via secure parameters.
     const result = authz('User:1', 'pay', 'Invoice', invoices.id); 
     
     expect(result).toBeDefined();
-    // Drizzle Dialect builder extracts SQL parameters to prevent SQL Injection
     const { sql: rawSql, params } = dialect.sqlToQuery(result as any);
     
     // Check it bound the right business column dynamically
-    expect(rawSql).toContain(`"zanzo_tuples"."object" = ? || ':' || "invoices"."id"`);
-    // Check it binds the relation identifier efficiently
+    // We now expect CONCAT(?, ?, col) because of secure parameters
+    expect(rawSql).toContain(`"zanzo_tuples"."object" = CONCAT(?, ?, "invoices"."id")`);
+    
+    // Check parameters
+    expect(params).toContain('Invoice');
+    expect(params).toContain(':');
     expect(params).toContain('owner');
-    // Check it filters on target subject
     expect(params).toContain('User:1');
+  });
+
+  it('should support SQLite dialect with || concatenation operator', () => {
+    const authz = createZanzoAdapter(engine, zanzoTuples, { dialect: 'sqlite' });
+    
+    const result = authz('User:1', 'pay', 'Invoice', invoices.id);
+    const { sql: rawSql, params } = dialect.sqlToQuery(result as any);
+    
+    // SQLite dialect uses || operator
+    expect(rawSql).toContain(`"zanzo_tuples"."object" = ? || ? || "invoices"."id"`);
+    expect(params).toContain('Invoice');
+    expect(params).toContain(':');
   });
 
   it('should evaluate nested conditions seamlessly mapping to Tuple Expansion strings (e.g. team.member) for O(1) EXISTS resolution', () => {
@@ -76,11 +90,50 @@ describe('@zanzo/drizzle Zero-Config Adapter', () => {
     expect(result).toBeDefined();
     const { sql: rawSql, params } = dialect.sqlToQuery(result as any);
     
-    // Expecting 2 queries chained via OR implicitly by the ReBAC engine parsing.
+    // Expecting 1 optimized query with IN clause
     expect(rawSql).toContain('EXISTS');
-    expect(rawSql).toContain(' or '); // The SQL operator wrapping both
+    expect(rawSql).toContain(' IN '); // The optimized IN operator for multiple relations
     expect(params).toContain('owner');
     expect(params).toContain('team.member');
     expect(params).toContain('User:99'); 
+  });
+
+  it('should apply debug mode and output logs without crashing', () => {
+    const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
+    const authz = createZanzoAdapter(engine, zanzoTuples, { debug: true });
+    
+    authz('User:1', 'read', 'Invoice', invoices.id);
+    
+    expect(debugSpy).toHaveBeenCalled();
+    debugSpy.mockRestore();
+  });
+
+  it('should respect custom dialect settings (mysql)', () => {
+    const authz = createZanzoAdapter(engine, zanzoTuples, { dialect: 'mysql' });
+    const result = authz('User:1', 'pay', 'Invoice', invoices.id);
+    const { sql: rawSql } = dialect.sqlToQuery(result as any);
+    
+    // MySQL uses CONCAT (default in the adapter logic for mysql/postgres)
+    expect(rawSql).toContain('CONCAT');
+    expect(rawSql).not.toContain('||');
+  });
+
+  it('should throw AST_OVERFLOW if the engine returns too many conditions', () => {
+    let megaBuilder = new ZanzoBuilder();
+    const relations: string[] = [];
+    for (let i = 0; i < 110; i++) {
+      megaBuilder = megaBuilder.entity(`Rel${i}` as any, { actions: [], relations: {} }) as any;
+      relations.push(`rel${i}`);
+    }
+    megaBuilder = megaBuilder.entity('Large', {
+      actions: ['read'],
+      relations: Object.fromEntries(relations.map(r => [r, 'User'])),
+      permissions: { read: relations as any }
+    }) as any;
+    
+    const largeEngine = new ZanzoEngine(megaBuilder.build());
+    const authz = createZanzoAdapter(largeEngine, zanzoTuples);
+
+    expect(() => authz('User:1', 'read' as any, 'Large' as any, invoices.id)).toThrow('[Zanzo] Security Exception');
   });
 });

@@ -1,0 +1,56 @@
+{
+  "name": "@zanzojs/cli",
+  "version": "0.3.2",
+  "description": "CLI for scaffolding ZanzoJS in your project",
+  "keywords": [
+    "zanzojs",
+    "rebac",
+    "authorization",
+    "cli",
+    "scaffolding"
+  ],
+  "homepage": "https://github.com/GonzaloJeria/zanzo",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/GonzaloJeria/zanzo.git",
+    "directory": "packages/cli"
+  },
+  "license": "MIT",
+  "author": "Gonzalo Jeria",
+  "type": "module",
+  "bin": {
+    "zanzojs": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@clack/prompts": "^0.7.0",
+    "jiti": "^2.6.1",
+    "picocolors": "^1.0.0",
+    "postgres": "^3.4.8"
+  },
+  "peerDependencies": {
+    "@zanzojs/core": "^0.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.35",
+    "@vitest/coverage-v8": "^4.1.0",
+    "tsup": "^8.3.5",
+    "typescript": "catalog:",
+    "vitest": "^4.1.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

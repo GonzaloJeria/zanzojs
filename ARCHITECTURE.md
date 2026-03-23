@@ -70,6 +70,15 @@ Invalid input throws an `Error` with a `[Zanzo] Invalid EntityRef:` prefix and a
 
 The public API of `ZanzoEngine.can()` still accepts raw strings — `parseEntityRef` runs internally at the boundary. Consumers do not need to construct `EntityRef` objects manually; they pass `'User:123'` directly.
 
+## 5. SQL Adapter Implementation Constraints
+
+> [!IMPORTANT]
+> **Dialect-Aware Concatenation:** The most complex part of building a Zanzo database adapter is the SQL-side reconstruction of the `Type:ID` identifier. Because the Universal Tuple Table stores these as literal strings, the adapter must join the `resourceType` (from the schema) with the `resourceId` column (from the business table) using the `ENTITY_REF_SEPARATOR`.
+>
+> - **Postgres/SQLite**: Uses `||` operator.
+> - **MySQL**: Uses `CONCAT()` function.
+> - **ORM Logic**: Native ORM filter builders often struggle with raw concatenation; manual SQL fragments or specialized builders are frequently required. Review the `@zanzojs/drizzle` implementation as a reference.
+
 ## 4. Known Limitations & v0.2.0 Roadmap
 
 **Nested SQL permissions require `expandTuples` at write-time.** The Drizzle adapter resolves nested permission paths exclusively via pre-materialized tuples. If a developer inserts base tuples directly without calling `expandTuples`, all nested permission checks (`org.admin`, `team.member`, etc.) will silently return `false`. This is documented in the README (Step 2.5) and the adapter emits a `console.warn` in development environments automatically.

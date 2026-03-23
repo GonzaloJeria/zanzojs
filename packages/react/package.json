@@ -1,6 +1,6 @@
 {
   "name": "@zanzojs/react",
-  "version": "0.1.0-beta.2",
+  "version": "0.3.0",
   "description": "React bindings for Zanzo ReBAC. O(1) permission checks via ZanzoProvider and useZanzo hook.",
   "keywords": [
     "@zanzojs/core",
@@ -21,9 +21,9 @@
   "type": "module",
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
-      "require": "./dist/index.cjs",
-      "types": "./dist/index.d.ts"
+      "require": "./dist/index.cjs"
     }
   },
   "main": "./dist/index.cjs",
@@ -43,7 +43,7 @@
     "test:types": "vitest run --typecheck"
   },
   "peerDependencies": {
-    "@zanzojs/core": "^0.1.0-beta.0",
+    "@zanzojs/core": "^0.3.0",
     "react": ">=18.0.0",
     "react-dom": ">=18.0.0"
   },

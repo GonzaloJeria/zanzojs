@@ -1,6 +1,7 @@
 {
   "name": "zanzo-monorepo",
   "private": true,
+  "type": "module",
   "packageManager": "pnpm@10.24.0",
   "engines": {
     "node": ">=20.0"
@@ -15,11 +16,14 @@
     "changeset": "changeset",
     "version-packages": "changeset version",
     "release": "changeset publish",
-    "dev:test": "pnpm --filter test-app dev"
+    "dev:test": "pnpm --filter test-app dev",
+    "cli": "node packages/cli/dist/index.js"
   },
   "devDependencies": {
+    "@changesets/cli": "latest",
+    "puppeteer": "^24.40.0",
     "turbo": "latest",
-    "@changesets/cli": "latest"
+    "vitest": "^4.1.1"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
@@ -27,5 +31,8 @@
       "es5-ext",
       "esbuild"
     ]
+  },
+  "dependencies": {
+    "tslib": "^2.8.1"
   }
 }

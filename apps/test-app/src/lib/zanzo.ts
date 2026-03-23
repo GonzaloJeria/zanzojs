@@ -48,3 +48,6 @@ export const schema = new ZanzoBuilder()
   .build();
 
 export const engine = new ZanzoEngine(schema);
+
+// v0.3.0 Best Practice: Enable built-in caching for server-side evaluation
+engine.enableCache({ ttlMs: 1000 * 60 * 5 }); // 5 minute cache

@@ -20,9 +20,12 @@ Writing raw SQL `JOIN`s for this is painfully slow and hard to maintain. Zanzo s
 
 The Zanzo ecosystem is split into modular packages so you only bundle exactly what you need:
 
-- **[`@zanzojs/core`](./packages/core)**: The zero-dependency core engine. Schema Builder, In-memory Graph Engine, AST Generator, and flat Client logic.
-- **[`@zanzojs/drizzle`](./packages/drizzle)**: The official Drizzle ORM adapter. Translates Zanzo ASTs into safe, parameterized SQL queries.
-- **[`@zanzojs/react`](./packages/react)**: React contextual bindings. Enables synchronous, zero-latency permission checks in `O(1)` time.
+- **[`@zanzojs/core`](./packages/core)**: The zero-dependency core engine. 100% isomorphic and Edge-compatible.
+- **[`@zanzojs/drizzle`](./packages/drizzle)**: The official Drizzle ORM adapter. Supports PostgreSQL, MySQL, and **Cloudflare D1**.
+- **[`@zanzojs/react`](./packages/react)**: React contextual bindings. Enables synchronous, zero-latency permission checks.
+- **[`@zanzojs/cli`](./packages/cli)**: Official CLI with schema validation and AST complexity linting.
+
+**NEW Samples:** [Next.js + Cloudflare D1](./examples/nextjs-d1)
 
 ---
 
@@ -32,7 +35,7 @@ To really understand Zanzo, let's walk through the actual lifecycle of securing 
 
 ### Step 1: Install the setup
 ```bash
-pnpm add @zanzojs/core @zanzojs/drizzle @zanzojs/react
+pnpm add @zanzojs/core@latest @zanzojs/drizzle@latest @zanzojs/react@latest
 pnpm add drizzle-orm # (Peer dependency)
 ```
 
@@ -86,17 +89,16 @@ export const documents = sqliteTable('documents', {
 });
 ```
 
-### Step 4: Write-Time Materialization
-Whenever a user creates a resource or joins a team, you just insert a Tuple. But since Zanzo uses **Query Pushdown** to make reads blazing fast in SQL, nested relationships (like `workspace.owner` -> `Document.edit`) must be pre-calculated during the write operation using `expandTuples()`.
+Whenever a user creates a resource or joins a team, you just insert a Tuple. But since Zanzo uses **Query Pushdown** to make reads blazing fast in SQL, nested relationships (like `workspace.owner` -> `Document.edit`) must be pre-calculated during the write operation using `materializeDerivedTuples()` and removed using `removeDerivedTuples()`.
 
 ```typescript
-import { expandTuples } from '@zanzojs/core';
+import { materializeDerivedTuples } from '@zanzojs/core';
 
 async function assignWorkspaceAdmin(workspaceId: string, userId: string) {
   const baseTuple = { subject: `User:${userId}`, relation: 'admin', object: `Workspace:${workspaceId}` };
 
   // Calculate nested dependencies automatically
-  const derived = await expandTuples({
+  const { expandedTuples } = await materializeDerivedTuples({
     schema: engine.getSchema(),
     newTuple: baseTuple,
     fetchChildren: async (parentObj, relation) => {
@@ -107,7 +109,7 @@ async function assignWorkspaceAdmin(workspaceId: string, userId: string) {
   });
 
   // Save the base tuple and all its nested implications atomically!
-  await db.insert(zanzoTuples).values([baseTuple, ...derived]);
+  await db.insert(zanzoTuples).values([baseTuple, ...expandedTuples]);
 }
 ```
 
@@ -130,19 +132,22 @@ export async function getMyDocuments(request: Request) {
 }
 ```
 
+> [!WARNING]
+> **EntityRef Concatenation Challenge:** Building a new adapter requires careful handling of SQL string concatenation to reconstruct the `Type:ID` format in `EXISTS` queries. Since dialects vary (e.g., `||` in Postgres/SQLite vs `CONCAT()` in MySQL), ensure your adapter is dialect-aware. Review the `@zanzojs/drizzle` implementation as a reference.
+
 ### Step 6: Power your Frontend with Snapshots (React)
 For the UI, you don't want to make an HTTP request every time a button renders. You take a "Server Snapshot" on page load, and send it to React.
 
 **Server:**
 ```typescript
-import { createZanzoSnapshot } from '@zanzojs/core';
+import { createZanzoSnapshot, ZanzoEngine } from '@zanzojs/core';
 
 // In your root layout/SSR:
 const userTuples = await db.select().from(zanzoTuples).where(like(zanzoTuples.subject, `User:${userId}%`));
 
 // Create a fresh engine per request — never reuse a shared instance
 const requestEngine = new ZanzoEngine(schema);
-requestEngine.addTuples(userTuples);
+requestEngine.load(userTuples); // ← load() for DB hydration
 
 const flatSnapshot = createZanzoSnapshot(requestEngine, `User:${userId}`); 
 // E.g. { "Document:A": ["read", "edit"], "Document:B": ["read"] }
@@ -152,9 +157,10 @@ const flatSnapshot = createZanzoSnapshot(requestEngine, `User:${userId}`);
 ```tsx
 'use client';
 import { useZanzo } from '@zanzojs/react';
+import type { schema } from './zanzo.config';
 
 function EditButton({ docId }) {
-  const { can } = useZanzo();
+  const { can } = useZanzo<typeof schema>();
 
   // Instant dictionary lookup! 0 latency. 0 network requests.
   if (!can('edit', `Document:${docId}`)) {
@@ -163,6 +169,119 @@ function EditButton({ docId }) {
 
   return <button>Edit Document</button>;
 }
+```
+
+---
+
+## Advanced APIs (v0.3.0+)
+
+### Debug Trace — `check().on()`
+Diagnose why a permission was granted or denied:
+
+```typescript
+const result = engine.for('User:alice').check('write').on('Document:doc1');
+console.log(result.allowed); // false
+console.log(result.trace);
+// [
+//   { path: 'owner', target: 'Document:doc1', found: false, subjects: [] },
+//   { path: 'viewer', target: 'Document:doc1', found: true, subjects: ['User:bob'] }
+// ]
+```
+
+### Batch Permission Checks — `canBatch()`
+Check multiple permissions in a single call. Internally, Zanzo optimizes this by grouping checks by resource—it only evaluates the graph for a resource once, sharing the computed context among all actions requested for that resource.
+
+```typescript
+const results = engine.for('User:alice').canBatch([
+  { action: 'read', resource: 'Document:doc1' },
+  { action: 'write', resource: 'Document:doc1' }, // Evaluated in the same traverse pass
+  { action: 'read', resource: 'Document:doc2' },
+]);
+
+results.get('read:Document:doc1');  // true
+results.get('write:Document:doc1'); // true
+results.get('read:Document:doc2');  // false
+```
+
+### Permission Cache — `enableCache()`
+Cache `can()` results with automatic TTL.
+> [!NOTE]
+> The cache is automatically invalidated whenever you mutate tuples via `addTuple`, `removeTuple`, `load`, or `clearTuples`.
+
+```typescript
+engine.enableCache({ ttlMs: 5000 });
+engine.for('User:alice').can('read').on('Document:doc1'); // cache miss → evaluates
+engine.for('User:alice').can('read').on('Document:doc1'); // cache hit → O(1)
+
+engine.grant('viewer').to('User:bob').on('Document:doc1'); // auto-invalidates cache
+engine.disableCache(); // turn off
+```
+
+### Snapshot Filtering — `createZanzoSnapshot({ entityTypes })`
+Reduce snapshot payload by filtering to specific entity types. Extremely useful for SSR (Next.js / Remix) when sending massive amounts of state to the browser.
+
+```typescript
+const snapshot = createZanzoSnapshot(engine, 'User:alice', {
+  entityTypes: ['Document', 'Project'], // Only include these entity types
+});
+```
+
+### Tuple Helpers
+
+```typescript
+import {
+  materializeDerivedTuples, // Computes transitive relationships upon tuple creation
+  removeDerivedTuples,      // Computes transitive relationships upon tuple deletion
+  deduplicateTuples,        // Remove duplicate tuples before INSERT
+  uniqueTupleKey,           // Generate unique key string: 'subject|relation|object'
+  buildBulkDeleteCondition, // Get triples array for bulk SQL DELETE
+} from '@zanzojs/core';
+
+// Deduplication before INSERT
+const unique = deduplicateTuples([...baseTuples, ...derived]);
+await db.insert(zanzoTuples).values(unique).onConflictDoNothing();
+
+// Bulk delete with buildBulkDeleteCondition
+// WARNING: You must filter by all three columns (subject, relation, object) inside a transaction.
+// Filtering only by `object` will accidentally delete other subjects' tuples!
+const toDelete = await removeDerivedTuples({ /* ... */ });
+const conditions = buildBulkDeleteCondition(toDelete);
+
+await db.transaction(async (tx) => {
+  for (const [sub, rel, obj] of conditions) {
+    await tx.delete(zanzoTuples).where(
+      and(
+        eq(zanzoTuples.subject, sub),
+        eq(zanzoTuples.relation, rel),
+        eq(zanzoTuples.object, obj)
+      )
+    );
+  }
+});
+```
+
+### Structured Error Handling
+
+```typescript
+import { ZanzoError, ZanzoErrorCode } from '@zanzojs/core';
+
+try {
+  engine.for('bad-input').can('read').on('Document:1');
+} catch (e) {
+  if (e instanceof ZanzoError) {
+    console.log(e.code);    // 'ZANZO_INVALID_ENTITY_REF'
+    console.log(e.message); // '[Zanzo] Invalid EntityRef: ...'
+  }
+}
+```
+
+### Recommended Database Indexes
+For optimal SQL performance, apply the indexes from [`migrations/recommended-indexes.sql`](./migrations/recommended-indexes.sql):
+
+```sql
+CREATE UNIQUE INDEX idx_zanzo_unique_tuple ON zanzo_tuples (subject, relation, object);
+CREATE INDEX idx_zanzo_subject_relation ON zanzo_tuples (subject, relation);
+CREATE INDEX idx_zanzo_object_relation ON zanzo_tuples (object, relation);
 ```
 
 ## License

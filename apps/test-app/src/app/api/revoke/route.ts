@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { collapseTuples } from '@zanzojs/core';
+import { removeDerivedTuples, buildBulkDeleteCondition } from '@zanzojs/core';
 import { engine } from '@/lib/zanzo';
 import { db } from '@/db';
 import { zanzoTuples } from '@/db/schema';
@@ -9,7 +9,7 @@ import { eq, and } from 'drizzle-orm';
  * POST /api/revoke
  * Body: { subject: string, relation: string, object: string }
  *
- * Collapses the tuple using collapseTuples() and deletes base + derived tuples.
+ * Collapses the tuple and its derivations within a single transaction.
  */
 export async function POST(request: NextRequest) {
   const body = await request.json();
@@ -24,45 +24,59 @@ export async function POST(request: NextRequest) {
 
   const baseTuple = { subject, relation, object };
 
-  const derivedTuples = await collapseTuples({
-    schema: engine.getSchema(),
-    revokedTuple: baseTuple,
-    fetchChildren: async (parentObject: string, relationToChildren: string) => {
-      const rows = db
-        .select({ object: zanzoTuples.object })
-        .from(zanzoTuples)
-        .where(
-          and(
-            eq(zanzoTuples.subject, parentObject),
-            eq(zanzoTuples.relation, relationToChildren),
-          ),
-        )
-        .all();
-      return rows.map((r) => r.object);
-    },
-  });
+  try {
+    // 1. Calculate derivations to remove OUTSIDE the transaction
+    const derived = await removeDerivedTuples({
+      schema: engine.getSchema(),
+      revokedTuple: baseTuple,
+      fetchChildren: async (parent, rel) => {
+        const rows = db
+          .select({ object: zanzoTuples.object })
+          .from(zanzoTuples)
+          .where(
+            and(
+              eq(zanzoTuples.subject, parent),
+              eq(zanzoTuples.relation, rel),
+            ),
+          )
+          .all();
+        return rows.map((r) => r.object);
+      },
+    });
 
-  // Delete all derived tuples first, then the base tuple
-  const allToDelete = [baseTuple, ...derivedTuples];
-  let deleted = 0;
+    // 2. Open a synchronous transaction for writes
+    const result = db.transaction((tx) => {
+      const allToDelete = [baseTuple, ...derived];
+      const conditions = buildBulkDeleteCondition(allToDelete);
 
-  for (const tuple of allToDelete) {
-    const result = db
-      .delete(zanzoTuples)
-      .where(
-        and(
-          eq(zanzoTuples.subject, tuple.subject),
-          eq(zanzoTuples.relation, tuple.relation),
-          eq(zanzoTuples.object, tuple.object),
-        ),
-      )
-      .run();
-    deleted += result.changes;
+      let deleted = 0;
+      for (const [sub, rel, obj] of conditions) {
+        const res = tx
+          .delete(zanzoTuples)
+          .where(
+            and(
+              eq(zanzoTuples.subject, sub),
+              eq(zanzoTuples.relation, rel),
+              eq(zanzoTuples.object, obj),
+            ),
+          )
+          .run();
+        deleted += res.changes;
+      }
+
+      return {
+        deleted,
+        base: baseTuple,
+        derived,
+      };
+    });
+
+    return NextResponse.json(result);
+  } catch (err) {
+    console.error('[Revoke API] Error:', err);
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : 'Unknown error' },
+      { status: 500 },
+    );
   }
-
-  return NextResponse.json({
-    deleted,
-    base: baseTuple,
-    derived: derivedTuples,
-  });
 }
