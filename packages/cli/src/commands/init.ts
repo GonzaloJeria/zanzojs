@@ -212,7 +212,7 @@ export async function initCommand(): Promise<void> {
 
   s.message('Injecting Zanzo dependencies into package.json...');
   try {
-    const pkgPath = path.resolve(process.cwd(), 'package.json');
+    const pkgPath = path.resolve('package.json');
     if (fs.existsSync(pkgPath)) {
       const pkgRaw = fs.readFileSync(pkgPath, 'utf8');
       const pkg = JSON.parse(pkgRaw);
@@ -229,14 +229,23 @@ export async function initCommand(): Promise<void> {
       }
       
       fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2), 'utf8');
+      p.log.success(pc.dim('  Modified package.json with @zanzojs dependencies.'));
       
       // Attempt generic sync using contextual package-manager 
+      s.message('Syncing node_modules...');
       const userAgent = process.env['npm_config_user_agent'] || '';
       const pm = userAgent.includes('pnpm') ? 'pnpm' : userAgent.includes('yarn') ? 'yarn' : 'npm';
-      execSync(`${pm} install`, { stdio: 'ignore' });
+      try {
+        execSync(`${pm} install`, { stdio: 'ignore' });
+      } catch (e) {
+        p.log.warn(`  Warning: Could not run "${pm} install". Please run it manually.`);
+      }
+    } else {
+      p.log.warn('  Warning: No package.json found to inject dependencies.');
     }
   } catch (err) {
-    p.log.warn('Could not auto-install dependencies natively. Make sure to run your package manager install manually.');
+    const msg = err instanceof Error ? err.message : String(err);
+    p.log.error(`  Error injecting dependencies: ${msg}`);
   }
 
   s.stop(pc.green('Zanzo Boilerplate generated successfully! 🔥'));
