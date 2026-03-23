@@ -1,5 +1,11 @@
 # @zanzojs/cli
 
+## 0.3.4
+
+### Patch Changes
+
+- a3fd7a8: fix(cli): Switch unreliable shell NPM package installations to deterministic package.json AST writes to prevent dependency injection failures in unconfigured environments.
+
 ## 0.3.3
 
 ### Patch Changes
