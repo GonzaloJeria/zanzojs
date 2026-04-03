@@ -1,16 +1,17 @@
-/**
- * Generator: API routes
- * Writes the permissions, grant, and revoke route files
- * based on the selected framework and output directory.
- */
-
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as p from '@clack/prompts';
-import type { FrameworkType } from '../templates/routes/permissions';
+import pc from 'picocolors';
 import { permissionsRouteTemplate } from '../templates/routes/permissions';
 import { grantRouteTemplate } from '../templates/routes/grant';
 import { revokeRouteTemplate } from '../templates/routes/revoke';
+import type { FrameworkType } from '../templates/routes/permissions';
+
+function getBaseRoutesDir(framework: FrameworkType, outputDir: string): string {
+  if (framework === 'nextjs-app') return path.join(outputDir, 'app/api');
+  if (framework === 'nextjs-pages') return path.join(outputDir, 'pages/api');
+  return path.join(outputDir, 'routes');
+}
 
 interface RouteConfig {
   name: string;
@@ -18,59 +19,84 @@ interface RouteConfig {
   content: string;
 }
 
-function getRoutePaths(framework: FrameworkType, outputDir: string): RouteConfig[] {
-  const permissions = permissionsRouteTemplate(framework);
-  const grant = grantRouteTemplate(framework);
-  const revoke = revokeRouteTemplate(framework);
+function getRouteContents(framework: FrameworkType, orm: string) {
+  if (framework === 'nextjs-app') {
+    return {
+      permContent: permissionsRouteTemplate(framework, orm),
+      grantContent: grantRouteTemplate(framework, orm),
+      revokeContent: revokeRouteTemplate(framework, orm),
+      ext: 'ts',
+    };
+  }
+
+  return {
+    permContent: permissionsRouteTemplate(framework, orm),
+    grantContent: grantRouteTemplate(framework, orm),
+    revokeContent: revokeRouteTemplate(framework, orm),
+    ext: 'ts',
+  };
+}
+
+function getRoutePaths(framework: FrameworkType, outputDir: string, orm: string): RouteConfig[] {
+  const { permContent, grantContent, revokeContent, ext } = getRouteContents(framework, orm);
 
   switch (framework) {
     case 'nextjs-app':
       return [
-        { name: 'permissions/route.ts', relativePath: path.join(outputDir, 'app/api/permissions/route.ts'), content: permissions },
-        { name: 'grant/route.ts', relativePath: path.join(outputDir, 'app/api/grant/route.ts'), content: grant },
-        { name: 'revoke/route.ts', relativePath: path.join(outputDir, 'app/api/revoke/route.ts'), content: revoke },
+        { name: 'permissions/route.ts', relativePath: path.join(outputDir, 'app/api/permissions/route.ts'), content: permContent },
+        { name: 'grant/route.ts', relativePath: path.join(outputDir, 'app/api/grant/route.ts'), content: grantContent },
+        { name: 'revoke/route.ts', relativePath: path.join(outputDir, 'app/api/revoke/route.ts'), content: revokeContent },
       ];
     case 'nextjs-pages':
       return [
-        { name: 'permissions.ts', relativePath: path.join(outputDir, 'pages/api/permissions.ts'), content: permissions },
-        { name: 'grant.ts', relativePath: path.join(outputDir, 'pages/api/grant.ts'), content: grant },
-        { name: 'revoke.ts', relativePath: path.join(outputDir, 'pages/api/revoke.ts'), content: revoke },
+        { name: 'permissions.ts', relativePath: path.join(outputDir, 'pages/api/permissions.ts'), content: permContent },
+        { name: 'grant.ts', relativePath: path.join(outputDir, 'pages/api/grant.ts'), content: grantContent },
+        { name: 'revoke.ts', relativePath: path.join(outputDir, 'pages/api/revoke.ts'), content: revokeContent },
       ];
     case 'express':
     case 'hono':
     case 'other':
       return [
-        { name: 'permissions.ts', relativePath: path.join(outputDir, 'routes/permissions.ts'), content: permissions },
-        { name: 'grant.ts', relativePath: path.join(outputDir, 'routes/grant.ts'), content: grant },
-        { name: 'revoke.ts', relativePath: path.join(outputDir, 'routes/revoke.ts'), content: revoke },
+        { name: `permissions.${ext}`, relativePath: path.join(outputDir, `routes/permissions.${ext}`), content: permContent },
+        { name: `grant.${ext}`, relativePath: path.join(outputDir, `routes/grant.${ext}`), content: grantContent },
+        { name: `revoke.${ext}`, relativePath: path.join(outputDir, `routes/revoke.${ext}`), content: revokeContent },
       ];
   }
 }
 
-export async function generateRoutes(framework: FrameworkType, outputDir: string): Promise<string[]> {
-  const routes = getRoutePaths(framework, outputDir);
+export async function generateRoutes(framework: FrameworkType, orm: string, outputDir: string): Promise<void> {
+  const routesDir = getBaseRoutesDir(framework, outputDir);
+
+  if (!fs.existsSync(routesDir)) {
+    fs.mkdirSync(routesDir, { recursive: true });
+  }
+
+  const routePaths = getRoutePaths(framework, outputDir, orm);
   const created: string[] = [];
 
-  for (const route of routes) {
+  for (const route of routePaths) {
     const filePath = path.resolve(route.relativePath);
 
     if (fs.existsSync(filePath)) {
       const overwrite = await p.confirm({
-        message: `${route.relativePath} already exists. Overwrite?`,
+        message: pc.yellow(`File ${route.relativePath} already exists. Overwrite?`),
         initialValue: false,
       });
       if (p.isCancel(overwrite) || !overwrite) {
-        p.log.warn(`Skipped ${route.relativePath}`);
         continue;
       }
+    } else {
+      const dir = path.dirname(filePath);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     }
 
-    const dir = path.dirname(filePath);
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(filePath, route.content, 'utf-8');
-    p.log.success(`Created ${route.relativePath}`);
-    created.push(filePath);
+    fs.writeFileSync(filePath, route.content, 'utf8');
+    created.push(route.name);
   }
 
-  return created;
+  if (created.length > 0) {
+    p.log.success(pc.dim(`  Created ${created.length} route files.`));
+  } else {
+    p.log.step(pc.dim(`  No route files created.`));
+  }
 }

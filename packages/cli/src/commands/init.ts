@@ -12,6 +12,7 @@ import { generateSchema } from '../generators/schema';
 import { generateMigration } from '../generators/migration';
 import { generateRoutes } from '../generators/routes';
 import { generateAgentContext } from '../generators/agent-context';
+import { generateUI } from '../generators/ui';
 import type { FrameworkType } from '../templates/routes/permissions';
 import type { DatabaseType } from '../templates/migration';
 import type { AgentType } from '../generators/agent-context';
@@ -197,21 +198,63 @@ export async function initCommand(): Promise<void> {
     await sleep(400);
 
     s.message(`Generating ${framework} API routes...`);
-    await generateRoutes(framework as FrameworkType, outputDir as string);
+    await generateRoutes(framework as FrameworkType, _orm as string, outputDir as string);
     await sleep(400);
   }
 
   s.message('Configuring AI agent context...');
   await generateAgentContext(agent as AgentType);
-  await sleep(400);
+  await sleep(200);
 
-  s.stop(pc.green('Boilerplate generated successfully!'));
+  s.message('Injecting User Interfaces...');
+  await generateUI(selectedTemplate, framework as string, outputDir as string);
+  await sleep(200);
+
+  s.message('Injecting Zanzo dependencies into package.json...');
+  try {
+    const pkgPath = path.resolve('package.json');
+    if (fs.existsSync(pkgPath)) {
+      const pkgRaw = fs.readFileSync(pkgPath, 'utf8');
+      const pkg = JSON.parse(pkgRaw);
+      pkg.dependencies = pkg.dependencies || {};
+      
+      pkg.dependencies['@zanzojs/core'] = '^0.3.1';
+      
+      if (framework === 'nextjs-app' || framework === 'nextjs-pages' || topology === 'frontend' || topology === 'fullstack') {
+        pkg.dependencies['@zanzojs/react'] = '^0.3.0';
+      }
+      
+      if (_orm === 'drizzle') {
+        pkg.dependencies['@zanzojs/drizzle'] = '^0.3.2';
+      }
+      
+      fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2), 'utf8');
+      p.log.success(pc.dim('  Modified package.json with @zanzojs dependencies.'));
+      
+      // Attempt generic sync using contextual package-manager 
+      s.message('Syncing node_modules...');
+      const userAgent = process.env['npm_config_user_agent'] || '';
+      const pm = userAgent.includes('pnpm') ? 'pnpm' : userAgent.includes('yarn') ? 'yarn' : 'npm';
+      try {
+        execSync(`${pm} install`, { stdio: 'ignore' });
+      } catch (e) {
+        p.log.warn(`  Warning: Could not run "${pm} install". Please run it manually.`);
+      }
+    } else {
+      p.log.warn('  Warning: No package.json found to inject dependencies.');
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    p.log.error(`  Error injecting dependencies: ${msg}`);
+  }
+
+  s.stop(pc.green('Zanzo Boilerplate generated successfully! 🔥'));
 
   const migrationCommand = getMigrationCommand(database as DatabaseType);
-  const routePaths = getRoutePaths(framework, outputDir as string);
+  const routePaths = getRoutePaths(framework as FrameworkType, outputDir as string);
 
   const steps = [
-    `${pc.bold('ZanzoJS is ready. Next steps:')}`,
+    `${pc.bold('Your environment is ready. Next steps:')}`,
     ''
   ];
   if (topology !== 'frontend') {
@@ -240,6 +283,13 @@ export async function initCommand(): Promise<void> {
   steps.push(`     ${pc.dim('// 2. Pass to provider')}`);
   steps.push(`     <ZanzoProvider snapshot={snapshot}>...<\/ZanzoProvider>`);
   steps.push('');
+  
+  if (framework === 'nextjs-app' && !Array.isArray(selectedTemplate)) {
+    const route = selectedTemplate === 'b2b' ? '/dashboard' : selectedTemplate === 'social' ? '/feed' : '/admin';
+    steps.push(`  ${pc.magenta(`✨ Check out your pre-built functional UI: npm run dev then visit http://localhost:3000${route}`)}`);
+    steps.push('');
+  }
+
   steps.push(`  Docs: ${pc.underline('https://github.com/GonzaloJeria/zanzo')}`);
 
   p.note(steps.join('\n'), 'Next Steps');
