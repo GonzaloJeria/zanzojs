@@ -149,25 +149,38 @@ describe('Selective Cache Invalidation', () => {
     expect((engine as any).cache.size).toBe(0);
   });
 
-  it('falls back to full clear when cache size exceeds selectiveThreshold', () => {
+  it('falls back to full clear when a mutation affects more resources than selectiveThreshold', () => {
+    const engine = new ZanzoEngine(transitiveSchema);
+    engine.enableCache({ invalidationType: 'selective', selectiveThreshold: 2 });
+
+    engine.grant('workspace').to('Workspace:A').on('Document:1');
+    engine.grant('workspace').to('Workspace:A').on('Document:2');
+    engine.grant('admin').to('User:1').on('Workspace:A');
+    engine.grant('workspace').to('Workspace:B').on('Document:3');
+    engine.grant('admin').to('User:2').on('Workspace:B');
+
+    expect(engine.for('User:1').can('write').on('Document:1')).toBe(true);
+    expect(engine.for('User:2').can('read').on('Document:3')).toBe(true);
+    expect((engine as any).cache.size).toBe(2);
+
+    // Workspace:A is reached by itself + 2 documents = 3 resources > threshold (2)
+    engine.revoke('admin').from('User:1').on('Workspace:A');
+    expect((engine as any).cache.size).toBe(0);
+  });
+
+  it('selective invalidation keeps entries for unrelated resources within the threshold', () => {
     const engine = new ZanzoEngine(schema);
-    // Setting threshold to 1
     engine.enableCache({ invalidationType: 'selective', selectiveThreshold: 1 });
 
     engine.grant('viewer').to('User:1').on('Document:1');
     engine.grant('viewer').to('User:2').on('Document:2');
 
-    // Populate cache with 2 entries
     expect(engine.for('User:1').can('read').on('Document:1')).toBe(true);
     expect(engine.for('User:2').can('read').on('Document:2')).toBe(true);
-    
-    // Validate cache size is larger than threshold
-    expect((engine as any).cache.size).toBe(2);
 
-    // Mutate unrelated document
     engine.revoke('viewer').from('User:1').on('Document:1');
 
-    // Because size (2) > threshold (1), it should have fallen back to full clear
-    expect((engine as any).cache.size).toBe(0);
+    expect((engine as any).cache.size).toBe(1);
+    expect(engine.for('User:1').can('read').on('Document:1')).toBe(false);
   });
 });

@@ -10,6 +10,38 @@ import type { ZanzoExtension } from '../extensions/index';
 
 const CONTROL_CHARS_REGEX = /[\x00-\x1F\x7F]/;
 
+/** Maximum number of relation hops evaluated for a single permission path. */
+const MAX_DEPTH = 50;
+
+/**
+ * A permission path pre-split at construction time. `id` is unique per engine and
+ * identifies the route in the evaluator's visited set.
+ * @internal
+ */
+interface CompiledRoute {
+  id: number;
+  parts: string[];
+  label: string;
+}
+
+/**
+ * Pre-computed evaluation plan for one entity type.
+ * @internal
+ */
+interface CompiledEntityPlan {
+  actions: string[];
+  actionSet: Set<string>;
+  /** Routes granting each action. Actions without routes are absent (always denied). */
+  routesByAction: Map<string, CompiledRoute[]>;
+  /** Distinct routes with every action they grant, for single-pass multi-action evaluation. */
+  routeGroups: { route: CompiledRoute; actions: string[] }[];
+}
+
+/** Trace label of a route evaluated from `offset` (e.g. 'org.admin' for offset 1 of 'workspace.org.admin'). */
+function routeLabel(route: CompiledRoute, offset: number): string {
+  return offset === 0 ? route.label : route.parts.slice(offset).join(RELATION_PATH_SEPARATOR);
+}
+
 /**
  * Represents a logical ReBAC relational tuple binding a Subject to an Object via a Relation.
  * Example: User:1 is the 'owner' of Project:A
@@ -68,6 +100,10 @@ export class ZanzoEngine<TSchema extends SchemaData> {
   private expiryIndex = new Map<string, Date>();
   // Optional permission cache with TTL
   private cache: PermissionCache | null = null;
+  // Reverse edges: Map<Subject, Set<Object>> — answers "which objects point at this node"
+  private reverseIndex = new Map<string, Set<string>>();
+  // Compiled evaluation plan per entity type, built once from the frozen schema
+  private plans = new Map<string, CompiledEntityPlan>();
   // Earliest future expiration among stored tuples. Once `Date.now()` crosses it,
   // cached results may be stale, so the cache is cleared once and the boundary recomputed.
   private nextExpiry = Number.POSITIVE_INFINITY;
@@ -79,6 +115,47 @@ export class ZanzoEngine<TSchema extends SchemaData> {
   constructor(schema: Readonly<TSchema>) {
     this.schema = schema;
     this.validateSchema();
+    this.compileSchema();
+  }
+
+  /**
+   * Pre-splits every permission path and groups identical routes per entity, so
+   * evaluation never parses schema strings on the hot path.
+   */
+  private compileSchema(): void {
+    let nextRouteId = 0;
+    for (const [entityName, definition] of Object.entries(this.schema) as [string, any][]) {
+      const actions: string[] = [...(definition.actions ?? [])];
+      const routesByAction = new Map<string, CompiledRoute[]>();
+      const routesByLabel = new Map<string, { route: CompiledRoute; actions: string[] }>();
+
+      for (const action of actions) {
+        const paths = definition.permissions?.[action];
+        if (!Array.isArray(paths) || paths.length === 0) continue;
+
+        const routes: CompiledRoute[] = [];
+        for (const path of paths as string[]) {
+          let group = routesByLabel.get(path);
+          if (!group) {
+            group = {
+              route: { id: nextRouteId++, parts: path.split(RELATION_PATH_SEPARATOR), label: path },
+              actions: [],
+            };
+            routesByLabel.set(path, group);
+          }
+          if (!group.actions.includes(action)) group.actions.push(action);
+          routes.push(group.route);
+        }
+        routesByAction.set(action, routes);
+      }
+
+      this.plans.set(entityName, {
+        actions,
+        actionSet: new Set(actions),
+        routesByAction,
+        routeGroups: [...routesByLabel.values()],
+      });
+    }
   }
 
   /**
@@ -141,8 +218,9 @@ export class ZanzoEngine<TSchema extends SchemaData> {
    *
    * @note The default `invalidationType: 'selective'` is backwards-compatible and optimizes cache
    * clearing by ensuring security is never broken while retaining unaffected entries.
-   * If the cache size exceeds `selectiveThreshold` (default 1000), it automatically falls back
-   * to a full clear to prevent O(N*DFS) performance degradation.
+   * Selective invalidation only touches the mutated object and the objects that reach it.
+   * If a mutation affects more than `selectiveThreshold` resources (default 1000), it falls
+   * back to a full clear.
    * If you need to reproduce the strict deterministic full-clear behavior of v0.3.0,
    * pass `invalidationType: 'full'`.
    *
@@ -165,30 +243,58 @@ export class ZanzoEngine<TSchema extends SchemaData> {
   }
 
   /**
-   * Performs a bounded DFS on the engine's internal index to determine if there is a
-   * dependency path from `start` to `target`.
-   * The index stores edges as: Object -> Relation -> Subjects.
-   * This means traversing the index goes from a resource to its owners/parents.
+   * Collects every object that can reach `start` by following index edges
+   * (object → subject), i.e. `start` and all of its ancestors in the relation graph.
+   * Uses the reverse index, so the cost is proportional to the result size.
+   *
+   * @returns The ancestor set (including `start`), or `null` if it exceeds `limit`.
    */
-  private isReachable(start: string, target: string, depth = 0, visited = new Set<string>()): boolean {
-    if (start === target) return true;
-    if (depth > 50) return false;
-
-    if (visited.has(start)) return false;
-    visited.add(start);
-
-    const targetRelationsIndex = this.index.get(start);
-    if (!targetRelationsIndex) return false;
-
-    for (const subjectsSet of targetRelationsIndex.values()) {
-      for (const subject of subjectsSet) {
-        if (this.isReachable(subject, target, depth + 1, visited)) {
-          return true;
-        }
+  private collectAncestors(start: string, limit = Number.POSITIVE_INFINITY): Set<string> | null {
+    const result = new Set<string>([start]);
+    const queue = [start];
+    for (let cursor = 0; cursor < queue.length; cursor++) {
+      const parents = this.reverseIndex.get(queue[cursor]!);
+      if (!parents) continue;
+      for (const parent of parents) {
+        if (result.has(parent)) continue;
+        result.add(parent);
+        if (result.size > limit) return null;
+        queue.push(parent);
       }
     }
+    return result;
+  }
 
-    return false;
+  /**
+   * Returns the objects through which `actor` could be granted anything: the objects
+   * where it appears as a subject plus all of their ancestors. A superset of the
+   * resources the actor can access, used to prune listing and snapshot compilation.
+   *
+   * @internal Used by `listAccessible` and `createZanzoSnapshot`.
+   */
+  public getCandidateObjects(actor: string): ReadonlySet<string> {
+    const candidates = this.collectAncestors(actor)!;
+    candidates.delete(actor);
+    return candidates;
+  }
+
+  /**
+   * Invalidates cached results affected by a mutation of `object`. Only resources that
+   * can reach `object` may change, so the walk is bounded by its ancestor set rather
+   * than by the cache size.
+   */
+  private invalidateCacheFor(object: string): void {
+    if (!this.cache) return;
+    if (this.cache.invalidationType === 'full') {
+      this.cache.invalidate();
+      return;
+    }
+    const affected = this.collectAncestors(object, this.cache.selectiveThreshold);
+    if (affected) {
+      this.cache.invalidateResources(affected);
+    } else {
+      this.cache.invalidate();
+    }
   }
 
   /**
@@ -325,6 +431,13 @@ export class ZanzoEngine<TSchema extends SchemaData> {
 
     subjectsSet.add(tuple.subject);
 
+    let parents = this.reverseIndex.get(tuple.subject);
+    if (!parents) {
+      parents = new Set<string>();
+      this.reverseIndex.set(tuple.subject, parents);
+    }
+    parents.add(tuple.object);
+
     // Store metadata for expiration support
     const storedTuple: StoredTuple = {
       subject: tuple.subject,
@@ -343,7 +456,7 @@ export class ZanzoEngine<TSchema extends SchemaData> {
 
     // Invalidate cache on any tuple mutation unless skipped for bulk processing
     if (!skipCacheInvalidation) {
-      this.cache?.invalidate(tuple as RelationTuple, (start, target) => this.isReachable(start, target));
+      this.invalidateCacheFor(tuple.object);
     }
   }
 
@@ -427,6 +540,20 @@ export class ZanzoEngine<TSchema extends SchemaData> {
         if (objectRelations.size === 0) {
           this.index.delete(tuple.object);
         }
+
+        // Drop the reverse edge only if no other relation still links object → subject
+        let stillLinked = false;
+        for (const subjects of objectRelations.values()) {
+          if (subjects.has(tuple.subject)) {
+            stillLinked = true;
+            break;
+          }
+        }
+        if (!stillLinked) {
+          const parents = this.reverseIndex.get(tuple.subject);
+          parents?.delete(tuple.object);
+          if (parents?.size === 0) this.reverseIndex.delete(tuple.subject);
+        }
       }
     }
 
@@ -437,7 +564,7 @@ export class ZanzoEngine<TSchema extends SchemaData> {
 
     // Invalidate cache on any tuple mutation unless skipped for bulk processing
     if (!skipCacheInvalidation) {
-      this.cache?.invalidate(tuple as RelationTuple, (start, target) => this.isReachable(start, target));
+      this.invalidateCacheFor(tuple.object);
     }
   }
 
@@ -457,7 +584,7 @@ export class ZanzoEngine<TSchema extends SchemaData> {
       this.expiryIndex.set(key, expiresAt);
       this.trackExpiry(expiresAt);
       // Invalidate cache once (not twice like remove+add would)
-      this.cache?.invalidate(tuple as RelationTuple, (start, target) => this.isReachable(start, target));
+      this.invalidateCacheFor(tuple.object);
     } else {
       // Tuple wasn't in the store yet — do a full add with expiresAt
       const tupleWithExpiry = { ...tuple, expiresAt };
@@ -470,6 +597,7 @@ export class ZanzoEngine<TSchema extends SchemaData> {
    */
   public clearTuples(): void {
     this.index.clear();
+    this.reverseIndex.clear();
     this.tupleStore.clear();
     this.expiryIndex.clear();
     this.nextExpiry = Number.POSITIVE_INFINITY;
@@ -560,9 +688,7 @@ export class ZanzoEngine<TSchema extends SchemaData> {
    *
    * @internal This method is public solely because `createZanzoSnapshot` (in compiler/)
    * requires access to it. It is NOT part of the public API contract and may change
-   * without notice in any minor version. Making it private would require moving
-   * `createZanzoSnapshot` into ZanzoEngine as a method, which would break the current
-   * modular architecture where the compiler is a standalone pure function.
+   * without notice in any minor version.
    */
   public evaluateAllActions(actor: string, resource: string): string[] {
     this.validateInput(actor, 'actor');
@@ -571,111 +697,54 @@ export class ZanzoEngine<TSchema extends SchemaData> {
     const now = Date.now();
     this.syncCacheWithExpirations(now);
 
-    // For field-level resources (e.g. Review:cert1#strengths), extract the entity type
-    // from the base object before the '#'
-    const baseResource = resource.includes(FIELD_SEPARATOR) ? resource.split(FIELD_SEPARATOR)[0]! : resource;
-    const resourceType = parseEntityRef(baseResource).type;
-    const resourceSchema = this.schema[resourceType as keyof TSchema];
-
-    if (!resourceSchema) return [];
-
-    const actions = resourceSchema.actions as string[];
-    if (!actions || actions.length === 0) return [];
-
-    const permissions = resourceSchema.permissions as Record<string, string[]> | undefined;
-    if (!permissions) return [];
+    const plan = this.planFor(resource);
+    if (!plan || plan.actions.length === 0) return [];
+    const { actions } = plan;
 
     // ── Cache fast-path: resolve as many actions as possible from cache ──
     const grantedActions = new Set<string>();
-    const uncachedActions: string[] = [];
+    let pending: Set<string>;
 
     if (this.cache) {
+      pending = new Set<string>();
       for (const action of actions) {
         const cached = this.cache.get(actor, action, resource);
         if (cached === true) {
           grantedActions.add(action);
         } else if (cached === undefined) {
-          // Cache miss — need to evaluate
-          uncachedActions.push(action);
+          pending.add(action);
         }
         // cached === false → explicitly denied, skip evaluation
       }
 
-      // If all actions are resolved from cache, return immediately
-      if (uncachedActions.length === 0) {
+      if (pending.size === 0) {
         return actions.filter(a => grantedActions.has(a));
       }
     } else {
-      uncachedActions.push(...actions);
+      pending = plan.actionSet;
     }
 
-    // Deduplicate routes: group UNCACHED actions by their route string to avoid
-    // traversing the same graph path multiple times (e.g. 'owner' used by view, edit, delete)
-    const routeMap = new Map<string, { parts: string[]; actions: Set<string> }>();
-
-    for (const action of uncachedActions) {
-      const relationsForAction = permissions[action];
-      if (!relationsForAction || relationsForAction.length === 0) continue;
-
-      for (const route of relationsForAction) {
-        let entry = routeMap.get(route);
-        if (!entry) {
-          entry = { parts: route.split(RELATION_PATH_SEPARATOR), actions: new Set() };
-          routeMap.set(route, entry);
-        }
-        entry.actions.add(action);
-      }
-    }
-
-    if (routeMap.size === 0) {
-      // All uncached actions have no routes — they are denied. Write to cache.
-      if (this.cache) {
-        for (const action of uncachedActions) {
-          this.cache.set(actor, action, resource, false);
-        }
-      }
-      return actions.filter(a => grantedActions.has(a));
-    }
-
-    // Track which uncached actions were evaluated so we can cache denials too
-    const evaluatedActions = new Set<string>();
-
-    // Evaluate each unique route once, mapping results to all associated actions
-    for (const { parts, actions: routeActions } of routeMap.values()) {
-      // Skip if all actions for this route are already granted
-      const allAlreadyGranted = [...routeActions].every(a => grantedActions.has(a));
-      if (allAlreadyGranted) continue;
-
-      // Each unique route gets a fresh visited set to avoid cross-route interference
-      const resolved = this.checkRelationsRecursive(
-        actor,
-        [parts],
-        resource, // Use the original resource (potentially with field separator)
-        new Set<string>(),
-        0,
-        '',
-        undefined,
-        undefined,
-        now,
-      );
-
+    // Each distinct route is evaluated once and its result applied to every action using it
+    for (const { route, actions: routeActions } of plan.routeGroups) {
+      let needed = false;
       for (const action of routeActions) {
-        evaluatedActions.add(action);
-      }
-
-      if (resolved) {
-        for (const action of routeActions) {
-          grantedActions.add(action);
+        if (pending.has(action) && !grantedActions.has(action)) {
+          needed = true;
+          break;
         }
       }
+      if (!needed) continue;
 
-      // Early exit if all actions are granted
-      if (grantedActions.size === actions.length) break;
+      if (this.checkRoute(actor, route, 0, resource, new Set<string>(), undefined, now)) {
+        for (const action of routeActions) {
+          if (pending.has(action)) grantedActions.add(action);
+        }
+        if (grantedActions.size === actions.length) break;
+      }
     }
 
-    // ── Write results to cache for all evaluated actions ──
     if (this.cache) {
-      for (const action of uncachedActions) {
+      for (const action of pending) {
         this.cache.set(actor, action, resource, grantedActions.has(action));
       }
     }
@@ -703,177 +772,88 @@ export class ZanzoEngine<TSchema extends SchemaData> {
     this.validateInput(actor, 'actor');
     this.validateInput(resource, 'resource');
 
-    // For field-level resources, extract the entity type from the base object
-    const baseResource = resource.includes(FIELD_SEPARATOR) ? resource.split(FIELD_SEPARATOR)[0]! : resource;
-    const resourceType = parseEntityRef(baseResource).type as TResourceName;
-    const resourceSchema = this.schema[resourceType];
-
-    if (!resourceSchema || !resourceSchema.actions.includes(action as any)) {
-      return false;
-    }
-
-    const allowedRelationsForAction = (resourceSchema.permissions?.[action] || []) as string[];
-
-    if (allowedRelationsForAction.length === 0) {
-      return false;
-    }
+    const routes = this.planFor(resource)?.routesByAction.get(action as string);
+    if (!routes) return false;
 
     const now = Date.now();
     this.syncCacheWithExpirations(now);
 
-    // Check cache before traversal
     if (this.cache) {
       const cached = this.cache.get(actor, action as string, resource);
       if (cached !== undefined) return cached;
     }
 
-    // Pre-split the allowed routes to avoid running String.split repeatedly during recursion
-    const preSplitRoutes: string[][] = allowedRelationsForAction.map((route) => route.split(RELATION_PATH_SEPARATOR));
-    
-    // ZANZO-REVIEW: Decidí NO APLICAR la pre-computación de `routeKey` global solicitada en Tarea 3c.
-    // Razón: En grafos combinatorios, si un nodo se alcanza por dos ramas requiriendo "remainders" distintos, 
-    // un hash global estático provocará un falso negativo en el caché `visited` y denegará permisos erróneamente.
-    // (Esto causaba que stress.test.ts fallara). Mantenemos la concatenación selectiva pasada por recursión.
+    let result = false;
+    const visited = new Set<string>();
+    for (const route of routes) {
+      if (this.checkRoute(actor, route, 0, resource, visited, undefined, now)) {
+        result = true;
+        break;
+      }
+    }
 
-    // Call the recursive engine internal handler (use the original resource, potentially with '#')
-    const result = this.checkRelationsRecursive(actor, preSplitRoutes, resource, new Set<string>(), 0, '', undefined, undefined, now);
-
-    // Store result in cache if enabled
     this.cache?.set(actor, action as string, resource, result);
-
     return result;
   }
 
   /**
-   * Internal recursive relation evaluation algorithm via Map Indexes.
-   *
-   * @param actor The original actor trying to accomplish the task
-   * @param allowedRoutes Array of relation chains (pre-splitted parts) that grant access
-   * @param currentTarget The current entity node in the graph being evaluated
-   * @param visited Set of visited nodes to prevent cycles in graph evaluation
-   * @returns True if relation path connects target to actor
+   * Resolves the compiled plan for a resource identifier. Field-level resources
+   * (e.g. `Review:cert1#strengths`) use the plan of their base entity type.
    */
-  private checkRelationsRecursive(
+  private planFor(resource: string): CompiledEntityPlan | undefined {
+    const hashIndex = resource.indexOf(FIELD_SEPARATOR);
+    const baseResource = hashIndex === -1 ? resource : resource.substring(0, hashIndex);
+    return this.plans.get(parseEntityRef(baseResource).type);
+  }
+
+  /**
+   * Evaluates one compiled route starting at `parts[offset]` on `target`.
+   * Walks the index from object to subject without allocating route copies;
+   * `visited` memoizes (node, route, offset) states so cycles and diamonds are explored once.
+   */
+  private checkRoute(
     actor: string,
-    allowedRoutes: string[][],
-    currentTarget: string,
+    route: CompiledRoute,
+    offset: number,
+    target: string,
     visited: Set<string>,
-    depth: number = 0,
-    parentSignature: string = '',
-    trace?: TraceStep[],
-    routeLabels?: string[],
-    now?: number,
+    trace: TraceStep[] | undefined,
+    now: number,
   ): boolean {
-    const timeToRun = now ?? Date.now();
-    if (depth > 50) {
-      throw new ZanzoError(ZanzoErrorCode.MAX_DEPTH_EXCEEDED, `[Zanzo] Security Exception: Maximum relationship depth of 50 exceeded. Graph might contain an infinite cycle or is too heavily nested.`);
+    if (offset > MAX_DEPTH) {
+      throw new ZanzoError(ZanzoErrorCode.MAX_DEPTH_EXCEEDED, `[Zanzo] Security Exception: Maximum relationship depth of ${MAX_DEPTH} exceeded. Graph might contain an infinite cycle or is too heavily nested.`);
     }
-    
-    // Memory Hotspot Optimization (GC Friendly):
-    const visitedSignature = `${actor}|${currentTarget}|${parentSignature}`;
 
-    if (visited.has(visitedSignature)) {
-      return false;
-    }
-    visited.add(visitedSignature);
+    const visitKey = `${target}|${route.id}|${offset}`;
+    if (visited.has(visitKey)) return false;
+    visited.add(visitKey);
 
-    const targetRelationsIndex = this.index.get(currentTarget);
+    const relation = route.parts[offset]!;
+    const subjects = this.index.get(target)?.get(relation);
 
-    // If there's absolutely no relations associated with this target, abort the exploration to save cycles
-    if (!targetRelationsIndex) {
-      if (trace && routeLabels) {
-        for (let i = 0; i < allowedRoutes.length; i++) {
-          trace.push({
-            path: routeLabels[i] || allowedRoutes[i]!.join('.'),
-            target: currentTarget,
-            found: false,
-            subjects: [],
-          });
-        }
-      }
+    if (!subjects || subjects.size === 0) {
+      trace?.push({ path: routeLabel(route, offset), target, found: false, subjects: [] });
       return false;
     }
 
-    // Since we traverse allowedRoutes dynamically, pass down the identifier of the CURRENT route choice
-    for (let i = 0; i < allowedRoutes.length; i++) {
-      const routeParts = allowedRoutes[i] as string[];
-      const currentRelation = routeParts[0] as string;
-      const subjectsForRelation = targetRelationsIndex.get(currentRelation);
+    if (offset === route.parts.length - 1) {
+      // Direct relation base case check O(1)
+      const found = subjects.has(actor) && !this.isExpired(actor, relation, target, now);
+      trace?.push({ path: routeLabel(route, offset), target, found, subjects: [...subjects] });
+      return found;
+    }
 
-      // Only materialize the subjects array when a trace was requested
-      const subjectsList = trace && subjectsForRelation ? [...subjectsForRelation] : [];
-
-      // If no subjects possess this relation on the target, skip this route
-      if (!subjectsForRelation || subjectsForRelation.size === 0) {
-        if (trace && routeLabels) {
-          trace.push({
-            path: routeLabels[i] || routeParts.join('.'),
-            target: currentTarget,
-            found: false,
-            subjects: [],
-          });
-        }
-        continue;
-      }
-
-      if (routeParts.length === 1) {
-        // Direct relation base case check O(1)
-        const found = subjectsForRelation.has(actor) && !this.isExpired(actor, currentRelation, currentTarget, timeToRun);
-        if (trace && routeLabels) {
-          trace.push({
-            path: routeLabels[i] || currentRelation,
-            target: currentTarget,
-            found,
-            subjects: subjectsList,
-          });
-        }
-        if (found) return true;
-      } else {
-        // Inherited nested relation graph exploration
-        const remainingRoute = routeParts.slice(1);
-        
-        const nextSignature = parentSignature ? parentSignature + '.' + currentRelation + `[${i}]` : currentRelation + `[${i}]`;
-
-        let anyFound = false;
-        // Optimize: we execute branching recursively into subsets, and stop at first generic success.
-        for (const intermediateSubject of subjectsForRelation) {
-          // Check if the intermediate tuple is expired
-          if (this.isExpired(intermediateSubject, currentRelation, currentTarget, timeToRun)) {
-            continue;
-          }
-
-          const isGranted = this.checkRelationsRecursive(
-            actor,
-            [remainingRoute], // Pass down the remaining route only
-            intermediateSubject,
-            visited,
-            depth + 1,
-            nextSignature,
-            trace,
-            routeLabels ? [routeLabels[i] ? routeLabels[i]!.split(RELATION_PATH_SEPARATOR).slice(1).join(RELATION_PATH_SEPARATOR) : remainingRoute.join('.')] : undefined,
-            timeToRun,
-          );
-
-          if (isGranted) {
-            anyFound = true;
-            break;
-          }
-        }
-
-        if (trace && routeLabels) {
-          trace.push({
-            path: routeLabels[i] || routeParts.join('.'),
-            target: currentTarget,
-            found: anyFound,
-            subjects: subjectsList,
-          });
-        }
-
-        if (anyFound) return true;
+    let found = false;
+    for (const intermediateSubject of subjects) {
+      if (this.isExpired(intermediateSubject, relation, target, now)) continue;
+      if (this.checkRoute(actor, route, offset + 1, intermediateSubject, visited, trace, now)) {
+        found = true;
+        break;
       }
     }
 
-    return false;
+    trace?.push({ path: routeLabel(route, offset), target, found, subjects: [...subjects] });
+    return found;
   }
 
   /**
@@ -888,37 +868,19 @@ export class ZanzoEngine<TSchema extends SchemaData> {
     this.validateInput(actor, 'actor');
     this.validateInput(resource, 'resource');
 
-    const baseResource = resource.includes(FIELD_SEPARATOR) ? resource.split(FIELD_SEPARATOR)[0]! : resource;
-    const resourceType = parseEntityRef(baseResource).type;
-    const resourceSchema = this.schema[resourceType];
-
     const trace: TraceStep[] = [];
-
-    if (!resourceSchema || !resourceSchema.actions.includes(action as any)) {
-      return { allowed: false, trace };
-    }
-
-    const allowedRelationsForAction = (resourceSchema.permissions?.[action] || []) as string[];
-
-    if (allowedRelationsForAction.length === 0) {
-      return { allowed: false, trace };
-    }
-
-    const preSplitRoutes: string[][] = allowedRelationsForAction.map((route) => route.split(RELATION_PATH_SEPARATOR));
+    const routes = this.planFor(resource)?.routesByAction.get(action);
+    if (!routes) return { allowed: false, trace };
 
     const now = Date.now();
-
-    const allowed = this.checkRelationsRecursive(
-      actor,
-      preSplitRoutes,
-      resource,
-      new Set<string>(),
-      0,
-      '',
-      trace,
-      allowedRelationsForAction,
-      now,
-    );
+    const visited = new Set<string>();
+    let allowed = false;
+    for (const route of routes) {
+      if (this.checkRoute(actor, route, 0, resource, visited, trace, now)) {
+        allowed = true;
+        break;
+      }
+    }
 
     return { allowed, trace };
   }

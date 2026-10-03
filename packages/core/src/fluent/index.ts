@@ -48,9 +48,8 @@ export class ForBuilder<TSchema extends SchemaData> {
    */
   listAccessible<TEntity extends AllSchemaEntities<TSchema> & string>(entityType: TEntity): AccessibleResult[] {
     const results: AccessibleResult[] = [];
-    const index = this.engine.getIndex();
-
-    for (const [objectKey] of index) {
+    // Only objects that can reach the actor through the graph can grant it anything
+    for (const objectKey of this.engine.getCandidateObjects(this.actor)) {
       // Only consider objects of the requested entity type
       if (!objectKey.startsWith(`${entityType}:`)) continue;
 

@@ -23,9 +23,8 @@ export interface CacheOptions {
    */
   invalidationType?: 'selective' | 'full';
   /**
-   * Threshold for the number of entries in the cache before falling back to
-   * a full cache clear during selective invalidation. A DFS traversal on a very
-   * large cache can be more expensive than a full clear.
+   * Maximum number of resources a single mutation may affect (the mutated object plus
+   * all objects that reach it) before selective invalidation falls back to a full clear.
    * @default 1000
    */
   selectiveThreshold?: number;
@@ -40,13 +39,17 @@ export interface CacheOptions {
 interface CacheEntry {
   result: boolean;
   expiresAt: number;
+  resource: string;
 }
 
 export class PermissionCache {
+  // Insertion order of this Map doubles as the LRU order
   private cache = new Map<string, CacheEntry>();
+  // Secondary index: resource → cache keys, so invalidation never scans the whole cache
+  private keysByResource = new Map<string, Set<string>>();
   private ttlMs: number;
-  private invalidationType: 'selective' | 'full';
-  private selectiveThreshold: number;
+  readonly invalidationType: 'selective' | 'full';
+  readonly selectiveThreshold: number;
   private maxEntries: number;
 
   constructor(options: CacheOptions = {}) {
@@ -71,11 +74,11 @@ export class PermissionCache {
     if (!entry) return undefined;
 
     if (Date.now() > entry.expiresAt) {
-      this.cache.delete(key);
+      this.deleteKey(key, entry);
       return undefined;
     }
 
-    // Refresh recency: Map iteration order doubles as the LRU order
+    // Refresh recency
     this.cache.delete(key);
     this.cache.set(key, entry);
 
@@ -85,62 +88,43 @@ export class PermissionCache {
   set(actor: string, action: string, resource: string, result: boolean): void {
     const key = PermissionCache.buildKey(actor, action, resource);
     this.cache.delete(key);
-    this.cache.set(key, {
-      result,
-      expiresAt: Date.now() + this.ttlMs,
-    });
+    this.cache.set(key, { result, expiresAt: Date.now() + this.ttlMs, resource });
+
+    let keys = this.keysByResource.get(resource);
+    if (!keys) {
+      keys = new Set<string>();
+      this.keysByResource.set(resource, keys);
+    }
+    keys.add(key);
 
     if (this.cache.size > this.maxEntries) {
-      const oldestKey = this.cache.keys().next().value;
-      if (oldestKey !== undefined) this.cache.delete(oldestKey);
+      const oldest = this.cache.entries().next().value;
+      if (oldest) this.deleteKey(oldest[0], oldest[1]);
     }
   }
 
-  /** 
-   * Invalidates cached entries based on the invalidation strategy.
-   * If 'selective', removes only paths that are transitively affected using the provided reachable callback.
-   * If 'full' or no tuple provided, clears the whole cache.
-   */
-  invalidate(
-    mutatedTuple?: { subject: string; object: string },
-    isReachable?: (start: string, target: string) => boolean
-  ): void {
-    if (this.invalidationType === 'full' || !mutatedTuple || !isReachable) {
-      this.cache.clear();
-      return;
+  /** Clears the whole cache. */
+  invalidate(): void {
+    this.cache.clear();
+    this.keysByResource.clear();
+  }
+
+  /** Removes every cached result for the given resources. Cost is proportional to the entries removed. */
+  invalidateResources(resources: Iterable<string>): void {
+    for (const resource of resources) {
+      const keys = this.keysByResource.get(resource);
+      if (!keys) continue;
+      for (const key of keys) this.cache.delete(key);
+      this.keysByResource.delete(resource);
     }
+  }
 
-    if (this.cache.size > this.selectiveThreshold) {
-      this.cache.clear();
-      return;
-    }
-
-    const { subject: mutatedSubject, object: mutatedObject } = mutatedTuple;
-
-    for (const key of this.cache.keys()) {
-      const parts = key.split('|');
-      const cachedActor = parts[0];
-      const cachedResource = parts[2];
-
-      if (!cachedActor || !cachedResource) continue;
-
-      // 1. Direct relation match
-      if (cachedActor === mutatedSubject || cachedResource === mutatedObject) {
-        this.cache.delete(key);
-        continue;
-      }
-
-      // 2. Descendencia: Cached resource descends from mutated object
-      if (isReachable(cachedResource, mutatedObject)) {
-        this.cache.delete(key);
-        continue;
-      }
-
-      // 3. Ascendencia: Cached actor descends from mutated subject
-      if (isReachable(cachedActor, mutatedSubject)) {
-        this.cache.delete(key);
-        continue;
-      }
+  private deleteKey(key: string, entry: CacheEntry): void {
+    this.cache.delete(key);
+    const keys = this.keysByResource.get(entry.resource);
+    if (keys) {
+      keys.delete(key);
+      if (keys.size === 0) this.keysByResource.delete(entry.resource);
     }
   }
 

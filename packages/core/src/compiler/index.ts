@@ -38,10 +38,11 @@ export function createZanzoSnapshot<TSchema extends SchemaData>(
   options?: SnapshotOptions,
 ): Record<string, string[]> {
   const result: Record<string, string[]> = {};
-  const index = engine.getIndex();
+  // Only objects that can reach the actor through the graph can grant it anything
+  const candidates = engine.getCandidateObjects(actor);
   const filterTypes = options?.entityTypes ? new Set(options.entityTypes) : null;
 
-  for (const [objectKey] of index) {
+  for (const objectKey of candidates) {
     // Filter by entity type if specified
     if (filterTypes) {
       const entityType = parseEntityRef(objectKey).type;

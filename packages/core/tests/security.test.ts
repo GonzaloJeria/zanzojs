@@ -32,27 +32,26 @@ describe('Zanzo Core Security Audit', () => {
   });
 
   it('should enforce Max Depth Threshold (50) and throw a controlled Security Exception on artificially deep nested chains', () => {
-    // Re-create the checkRelationsRecursive max depth exploit loop dynamically
-    const fakeRoute = new Array(51).fill('parent').map(p => [p]);
-    
-    // Call the internal recursive explicitly bypassing the entry limit just for validation coverage
-    // Actually wait, let's just trigger it logically since we have 50 layers deeply linked:
+    // A schema path with more than 50 hops must abort with a controlled exception
+    const deepPath = [...new Array(51).fill('parent'), 'owner'].join('.');
+    const deepSchema = new ZanzoBuilder()
+      .entity('User', { actions: [], relations: {} })
+      .entity('Node', {
+        actions: ['read'],
+        relations: { parent: 'Node', owner: 'User' },
+        permissions: { read: [deepPath as 'owner'] }
+      })
+      .build();
+    const deepEngine = new ZanzoEngine(deepSchema);
+
     const nodes = Array.from({ length: 55 }, (_, i) => `Node:${i}`);
     for (let i = 0; i < 52; i++) {
-       engine.addTuple({ subject: nodes[i+1], relation: 'parent', object: nodes[i] });
+      deepEngine.addTuple({ subject: nodes[i + 1]!, relation: 'parent', object: nodes[i]! });
     }
-    
-    // Now User:99 owns Node:52
-    engine.addTuple({ subject: 'User:99', relation: 'owner', object: nodes[52] });
+    deepEngine.addTuple({ subject: 'User:99', relation: 'owner', object: nodes[52]! });
 
-    // Assuming the path requires stepping 50+ times:
-    // This will actually stop at depth 50 and throw instead of continuing recursively forever.
-    // However, the standard `can` dynamically builds the evaluation using the AST limit (which only has 1 layer deep 'parent.owner').
-    // To trigger depth, we simulate the internal method directly or build a massive linear explicit mock graph if public.
-    // Let's use internal accessor just to check the depth boundary:
-    expect(() => {
-       (engine as any).checkRelationsRecursive('User:99', fakeRoute, 'Node:0', new Set(), 51);
-    }).toThrow(/Security Exception: Maximum relationship depth of 50 exceeded/);
+    expect(() => deepEngine.can('User:99', 'read', 'Node:0'))
+      .toThrow(/Security Exception: Maximum relationship depth of 50 exceeded/);
   });
   
   it('should immediately intercept poisoning attacks (Null byte injections or monstrous payloads)', () => {
