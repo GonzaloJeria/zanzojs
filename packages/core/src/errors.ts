@@ -43,6 +43,10 @@ export const ZanzoErrorCode = {
   CYCLE_DETECTED: 'ZANZO_CYCLE_DETECTED',
   /** Tuple expansion was aborted via AbortSignal timeout */
   EXPANSION_ABORTED: 'ZANZO_EXPANSION_ABORTED',
+  /** The schema is malformed: expression syntax, unknown subject types or recursive computed permissions */
+  INVALID_SCHEMA: 'ZANZO_INVALID_SCHEMA',
+  /** The schema uses a feature this evaluator or adapter does not support yet */
+  UNSUPPORTED_FEATURE: 'ZANZO_UNSUPPORTED_FEATURE',
 } as const;
 
 export type ZanzoErrorCodeValue = typeof ZanzoErrorCode[keyof typeof ZanzoErrorCode];

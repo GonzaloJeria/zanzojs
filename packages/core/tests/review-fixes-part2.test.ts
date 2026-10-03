@@ -106,7 +106,7 @@ describe('Fix 7: AbortSignal timeout support in DeferredExpansion.executePending
       newTuple: { subject: 'User:alice', relation: 'viewer', object: 'Folder:A' },
       mode: 'deferred',
       signal: controller.signal,
-      fetchChildren: async (parentObj) => {
+      fetchChildren: async (_parentObj) => {
         // Simulate a painfully slow DB query that hangs
         return new Promise((resolve) => {
           setTimeout(() => {

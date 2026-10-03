@@ -1,11 +1,11 @@
 {
-  "memory: heap bytes per tuple (100k tuples)": 486.3,
-  "bundle: dist/index.js gzip": 14541,
-  "load: µs per tuple": 2.693,
-  "check: direct relation": 1.305,
-  "check: nested workspace.org.admin": 2.105,
-  "check: 5 routes, denied": 3.772,
-  "evaluateAllActions: 4 actions": 3.658,
-  "listAccessible: Document (50k docs)": 18.92,
-  "snapshot: Document (50k docs)": 38.7
+  "memory: heap bytes per tuple (100k tuples)": 486.9,
+  "bundle: dist/index.js gzip": 17511,
+  "load: µs per tuple": 2.513,
+  "check: direct relation": 1.26,
+  "check: nested workspace.org.admin": 1.366,
+  "check: 5 routes, denied": 2.092,
+  "evaluateAllActions: 4 actions": 3.296,
+  "listAccessible: Document (50k docs)": 15.88,
+  "snapshot: Document (50k docs)": 17.6
 }

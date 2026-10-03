@@ -40,10 +40,16 @@ export async function checkCommand(configPath: string) {
 
     // Pre-compute all relations targets across the entire schema to find unreferenced entities
     const allReferencedTargets = new Set<string>();
+    // Relations used as usersets elsewhere (e.g. 'Group#member'), keyed as 'Group#member'
+    const usersetReferences = new Set<string>();
     for (const definition of Object.values(rawSchema) as any[]) {
       if (definition.relations) {
         for (const target of Object.values(definition.relations)) {
-          allReferencedTargets.add(target as string);
+          // A relation may accept several subject types, wildcards ('User:*') and usersets ('Group#member')
+          for (const spec of (Array.isArray(target) ? target : [target]) as string[]) {
+            allReferencedTargets.add(spec.replace(/:\*$/, '').replace(/#.*$/, ''));
+            if (spec.includes('#')) usersetReferences.add(spec);
+          }
         }
       }
     }
@@ -52,7 +58,7 @@ export async function checkCommand(configPath: string) {
     for (const [entityName, definition] of Object.entries(rawSchema) as [string, any][]) {
       const actions = definition.actions || [];
       const relations = definition.relations || {};
-      const permissions = definition.permissions || {};
+      const permissions = normalizePermissions(definition.permissions || {});
 
       // Duplicated actions
       const actionSet = new Set<string>();
@@ -109,7 +115,7 @@ export async function checkCommand(configPath: string) {
       }
 
       for (const relation of definedRelations) {
-        if (!relationsUsedInPermissions.has(relation)) {
+        if (!relationsUsedInPermissions.has(relation) && !usersetReferences.has(`${entityName}#${relation}`)) {
           printWarning(entityName, `Unused Relation "${relation}"`,
             `The relation "${relation}" is declared but is never referenced in any permission path.`);
         }
@@ -204,4 +210,19 @@ export async function checkCommand(configPath: string) {
     }
     process.exit(1);
   }
+}
+
+/**
+ * Converts every permission rule to a list of dotted paths so the lint rules can treat both
+ * syntaxes alike: arrays stay as they are, expressions such as `'(viewer | parent->view) - banned'`
+ * become their terms (`viewer`, `parent.view`, `banned`).
+ */
+function normalizePermissions(permissions: Record<string, unknown>): Record<string, string[]> {
+  const normalized: Record<string, string[]> = {};
+  for (const [action, rule] of Object.entries(permissions)) {
+    const source = Array.isArray(rule) ? rule.join(' | ') : String(rule);
+    const terms = source.match(/[A-Za-z_][A-Za-z0-9_]*(?:(?:->|\.)[A-Za-z_][A-Za-z0-9_]*)*/g) ?? [];
+    normalized[action] = terms.map((term) => term.replace(/->/g, '.'));
+  }
+  return normalized;
 }

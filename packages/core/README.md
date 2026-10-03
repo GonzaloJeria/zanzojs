@@ -66,6 +66,56 @@ export const schema = new ZanzoBuilder()
 
 **Key concept:** `folder.admin` is a nested permission path. It means "the admin of the folder that contains this document". This requires `materializeDerivedTuples()` at write time — see `@zanzojs/drizzle`.
 
+### Permission expressions
+
+Besides arrays of paths, a permission can be an expression with Zanzibar semantics. When
+`actions` is omitted, the permission names are the actions.
+
+```typescript
+const schema = new ZanzoBuilder()
+  .entity('User', { relations: {}, permissions: {} })
+  .entity('Group', {
+    relations: { member: ['User', 'Group#member'] }, // nested groups
+    permissions: {},
+  })
+  .entity('Folder', {
+    relations: { parent: 'Folder', viewer: ['User', 'Group#member'] },
+    permissions: { view: 'viewer | parent->view' }, // recursive inheritance
+  })
+  .entity('Document', {
+    relations: {
+      parent: 'Folder',
+      owner: 'User',
+      viewer: ['User', 'User:*', 'Group#member'], // users, everyone, or members of a group
+      banned: 'User',
+    },
+    permissions: {
+      edit: 'owner',
+      view: '(viewer | edit | parent->view) - banned',
+    },
+  })
+  .build();
+
+engine.grant('member').to('Group:backend#member').on('Group:eng'); // backend ⊂ eng
+engine.grant('viewer').to('Group:eng#member').on('Folder:root');
+engine.grant('viewer').to('User:*').on('Document:changelog');      // public
+```
+
+| Syntax | Meaning |
+|---|---|
+| `owner` | relation (or another permission) of the same object |
+| `parent->view` | `view` evaluated on each subject of `parent`; `parent.view` is the legacy spelling |
+| `a \| b` | union |
+| `a & b` | intersection |
+| `a - b` | exclusion |
+| `'User:*'` | a relation subject type accepting every User (`grant(...).to('User:*')`) |
+| `'Group#member'` | a relation subject type accepting the members of a Group (`to('Group:eng#member')`) |
+
+> The SQL adapter (`@zanzojs/drizzle`) evaluates unions of paths, including permissions that
+> reference other permissions. Intersections, exclusions, recursive permissions, usersets and
+> wildcards are evaluated by `ZanzoEngine`; `buildDatabaseQuery` throws `ZANZO_UNSUPPORTED_FEATURE`
+> for them until the adapter supports them.
+
 ### Step 2: Load tuples for the current user only
 
 Never load all tuples for all users. On each request, load only the tuples relevant to the authenticated user.

@@ -97,7 +97,7 @@ describe('Fix 2 — Diamond graph expansion (no false CYCLE_DETECTED)', () => {
 
     // Document:shared is child of both Workspace:ws1 and Team:team1
     const fetchChildren = vi.fn()
-      .mockImplementation(async (parentObj: string, relName: string) => {
+      .mockImplementation(async (_parentObj: string, relName: string) => {
         if (relName === 'workspace') return ['Document:shared', 'Document:only-ws'];
         if (relName === 'team') return ['Document:shared', 'Document:only-team'];
         return [];

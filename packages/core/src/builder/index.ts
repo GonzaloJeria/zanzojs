@@ -1,15 +1,37 @@
 /**
+ * Subject types a relation accepts: an entity type (`'User'`), a public wildcard
+ * (`'User:*'`), a userset (`'Group#member'`), or an array mixing several of them.
+ */
+export type RelationTarget = string | readonly string[];
+
+/**
+ * A reference usable inside a permission: a relation or permission of the same entity,
+ * or a path through a relation (`workspace->admin`, legacy `workspace.admin`).
+ */
+export type PermissionPath<TRelationName extends string, TPermissionName extends string> =
+  | TRelationName
+  | TPermissionName
+  | `${TRelationName}.${string}`
+  | `${TRelationName}->${string}`;
+
+/**
+ * A permission rule: either an array of paths (their union), or an expression such as
+ * `'viewer | edit | parent->view'`, `'viewer & org->member'` or `'(viewer | owner) - banned'`.
+ */
+export type PermissionRule<TRelationName extends string = string, TPermissionName extends string = string> =
+  | readonly PermissionPath<TRelationName, TPermissionName>[]
+  | (string & {});
+
+/**
  * Definition for an entity in the ReBAC schema.
  */
 export interface EntityDefinition<
   A extends string = string,
-  R extends Record<string, string> = Record<string, string>,
+  R extends Record<string, RelationTarget> = Record<string, RelationTarget>,
 > {
   actions: A[];
   relations?: R;
-  permissions?: Partial<
-    Record<A, Array<Extract<keyof R, string> | `${Extract<keyof R, string>}.${string}`>>
-  >;
+  permissions?: Partial<Record<A, PermissionRule<Extract<keyof R, string>, A>>>;
 }
 
 import { ZanzoError, ZanzoErrorCode } from '../errors';
@@ -18,6 +40,15 @@ import { ZanzoError, ZanzoErrorCode } from '../errors';
  * Internal representation of the ReBAC schema.
  */
 export type SchemaData = Record<string, EntityDefinition<any, any>>;
+
+/** Schema entry produced by `ZanzoBuilder.entity()`. */
+export type EntityEntry<TName extends string, TActions extends string, TRelations> = {
+  [K in TName]: {
+    actions: TActions[];
+    relations: TRelations;
+    permissions: Partial<Record<TActions, PermissionRule<Extract<keyof TRelations, string>, TActions>>>;
+  };
+};
 
 /**
  * A fluent API builder for constructing a ReBAC schema.
@@ -34,51 +65,64 @@ export class ZanzoBuilder<TSchema extends SchemaData = {}> {
   /**
    * Defines a new entity (resource) in the schema.
    *
+   * Relations accept one or several subject types, public wildcards and usersets:
+   * `{ owner: 'User', viewer: ['User', 'User:*', 'Group#member'], parent: 'Folder' }`.
+   *
+   * Permissions accept an array of paths (their union) or an expression:
+   * `{ edit: ['owner', 'workspace.admin'], view: 'viewer | edit | parent->view' }`.
+   * When `actions` is omitted, the permission names are the actions.
+   *
    * @param name The name of the entity resource (e.g., 'User', 'Project')
-   * @param definition The definition containing allowed actions and relations.
+   * @param definition The definition containing allowed actions, relations and permissions.
    * @returns A new ZanzoBuilder instance carrying the expanded type information.
    */
   public entity<
     TName extends string,
     TActions extends string,
-    TRelations extends Record<string, keyof TSchema | string> = Record<never, never>,
+    TRelations extends Record<string, RelationTarget> = Record<never, never>,
   >(
     name: TName,
     definition: {
       actions: readonly TActions[];
       relations?: TRelations;
       permissions?: Partial<
-        Record<
-          TActions,
-          readonly (keyof TRelations | `${Extract<keyof TRelations, string>}.${string}`)[]
-        >
+        Record<TActions, PermissionRule<Extract<keyof TRelations, string>, NoInfer<TActions>>>
       >;
     },
-  ): ZanzoBuilder<
-    TSchema & {
-      [K in TName]: {
-        actions: TActions[];
-        relations: TRelations;
-        permissions: Partial<
-          Record<TActions, (keyof TRelations | `${Extract<keyof TRelations, string>}.${string}`)[]>
-        >;
-      };
-    }
-  > {
+  ): ZanzoBuilder<TSchema & EntityEntry<TName, TActions, TRelations>>;
+  public entity<
+    TName extends string,
+    TPermissions extends Record<string, PermissionRule<Extract<keyof TRelations, string>, string>>,
+    TRelations extends Record<string, RelationTarget> = Record<never, never>,
+  >(
+    name: TName,
+    definition: {
+      relations?: TRelations;
+      permissions: TPermissions;
+    },
+  ): ZanzoBuilder<TSchema & EntityEntry<TName, Extract<keyof TPermissions, string>, TRelations>>;
+  public entity(
+    name: string,
+    definition: { actions?: readonly string[]; relations?: Record<string, RelationTarget>; permissions?: Record<string, unknown> },
+  ): ZanzoBuilder<any> {
+    const permissions = definition.permissions ?? {};
     const newSchema = {
       ...this.schema,
       [name]: {
-        actions: [...definition.actions],
+        actions: [...(definition.actions ?? Object.keys(permissions))],
         // Default to empty object if no relations provided to maintain stable structure
-        relations: definition.relations ? { ...definition.relations } : {},
-        permissions: definition.permissions
-          ? Object.fromEntries(
-              Object.entries(definition.permissions).map(([action, relations]) => [
-                action,
-                [...(relations as (keyof TRelations | string)[])],
-              ]),
-            )
-          : {},
+        relations: Object.fromEntries(
+          Object.entries(definition.relations ?? {}).map(([relation, target]) => [
+            relation,
+            Array.isArray(target) ? [...target] : target,
+          ]),
+        ),
+        permissions: Object.fromEntries(
+          Object.entries(permissions).map(([action, rule]) => [
+            action,
+            Array.isArray(rule) ? [...rule] : rule,
+          ]),
+        ),
       },
     };
 

@@ -1,45 +1,50 @@
 import type { SchemaData } from '../builder/index';
 import type { Tuple, AllSchemaRelations, SchemaEntityRef } from '../types/index';
-import { parseEntityRef, RELATION_PATH_SEPARATOR, FIELD_SEPARATOR } from '../ref/index';
+import { RELATION_PATH_SEPARATOR, FIELD_SEPARATOR } from '../ref/index';
 import { ForBuilder, GrantBuilder, RevokeBuilder } from '../fluent/index';
 import { ZanzoError, ZanzoErrorCode } from '../errors';
 import type { CheckResult, TraceStep } from './trace';
 import { PermissionCache } from './cache';
 import type { CacheOptions } from './cache';
 import type { ZanzoExtension } from '../extensions/index';
+import { compileSchema, type CompiledSchema, type CompiledType, type Node } from '../schema/compile';
 
 const CONTROL_CHARS_REGEX = /[\x00-\x1F\x7F]/;
 
-/** Maximum number of relation hops evaluated for a single permission path. */
+/** Maximum number of relation hops evaluated for a single check. */
 const MAX_DEPTH = 50;
 
-/**
- * A permission path pre-split at construction time. `id` is unique per engine and
- * identifies the route in the evaluator's visited set.
- * @internal
- */
-interface CompiledRoute {
-  id: number;
-  parts: string[];
-  label: string;
-}
+/** Entity type of an object, subject or userset reference (`Type:id`, `Type:id#rel`, `Type:*`). */
+const typeOf = (ref: string): string => ref.substring(0, ref.indexOf(':'));
+
+/** Subjects that are not a concrete object: usersets (`Group:eng#member`) and wildcards (`User:*`). */
+const isIndirectSubject = (subject: string): boolean => subject.endsWith(':*') || subject.includes('#');
+
+/** The object a subject refers to: `Group:eng` for `Group:eng#member`, itself otherwise. */
+const subjectObject = (subject: string): string => {
+  const hash = subject.indexOf('#');
+  return hash === -1 ? subject : subject.substring(0, hash);
+};
+
+const IN_PROGRESS = 2;
 
 /**
- * Pre-computed evaluation plan for one entity type.
+ * State of one evaluation (a check or a multi-action pass for one actor and resource).
  * @internal
  */
-interface CompiledEntityPlan {
-  actions: string[];
-  actionSet: Set<string>;
-  /** Routes granting each action. Actions without routes are absent (always denied). */
-  routesByAction: Map<string, CompiledRoute[]>;
-  /** Distinct routes with every action they grant, for single-pass multi-action evaluation. */
-  routeGroups: { route: CompiledRoute; actions: string[] }[];
-}
-
-/** Trace label of a route evaluated from `offset` (e.g. 'org.admin' for offset 1 of 'workspace.org.admin'). */
-function routeLabel(route: CompiledRoute, offset: number): string {
-  return offset === 0 ? route.label : route.parts.slice(offset).join(RELATION_PATH_SEPARATOR);
+interface EvalContext {
+  actor: string;
+  actorType: string;
+  now: number;
+  depth: number;
+  /**
+   * `object#name` → 0 (false), 1 (true) or IN_PROGRESS, shared across the actions of one pass.
+   * Allocated on first use: plain relations and arrow chains never need it.
+   */
+  memo?: Map<string, number>;
+  /** Incremented whenever a cycle is cut; false results computed during a cycle are not memoized */
+  cycleHits: number;
+  trace?: TraceStep[];
 }
 
 /**
@@ -100,10 +105,13 @@ export class ZanzoEngine<TSchema extends SchemaData> {
   private expiryIndex = new Map<string, Date>();
   // Optional permission cache with TTL
   private cache: PermissionCache | null = null;
-  // Reverse edges: Map<Subject, Set<Object>> — answers "which objects point at this node"
+  // Reverse edges keyed by the subject's object (`Group:eng` for `Group:eng#member`, `User:*` for
+  // wildcards): Map<SubjectObject, Set<Object>> — answers "which objects point at this node"
   private reverseIndex = new Map<string, Set<string>>();
-  // Compiled evaluation plan per entity type, built once from the frozen schema
-  private plans = new Map<string, CompiledEntityPlan>();
+  // Usersets and wildcards per object and relation, so direct checks stay O(1) when there are none
+  private indirectIndex = new Map<string, Map<string, Set<string>>>();
+  // Schema compiled to rewrite trees, built once at construction
+  private compiled: CompiledSchema;
   // Earliest future expiration among stored tuples. Once `Date.now()` crosses it,
   // cached results may be stale, so the cache is cleared once and the boundary recomputed.
   private nextExpiry = Number.POSITIVE_INFINITY;
@@ -112,101 +120,12 @@ export class ZanzoEngine<TSchema extends SchemaData> {
     return `${subject}|${relation}|${object}`;
   }
 
+  /**
+   * @throws {ZanzoError} MISSING_RELATION or INVALID_SCHEMA when the schema is invalid.
+   */
   constructor(schema: Readonly<TSchema>) {
     this.schema = schema;
-    this.validateSchema();
-    this.compileSchema();
-  }
-
-  /**
-   * Pre-splits every permission path and groups identical routes per entity, so
-   * evaluation never parses schema strings on the hot path.
-   */
-  private compileSchema(): void {
-    let nextRouteId = 0;
-    for (const [entityName, definition] of Object.entries(this.schema) as [string, any][]) {
-      const actions: string[] = [...(definition.actions ?? [])];
-      const routesByAction = new Map<string, CompiledRoute[]>();
-      const routesByLabel = new Map<string, { route: CompiledRoute; actions: string[] }>();
-
-      for (const action of actions) {
-        const paths = definition.permissions?.[action];
-        if (!Array.isArray(paths) || paths.length === 0) continue;
-
-        const routes: CompiledRoute[] = [];
-        for (const path of paths as string[]) {
-          let group = routesByLabel.get(path);
-          if (!group) {
-            group = {
-              route: { id: nextRouteId++, parts: path.split(RELATION_PATH_SEPARATOR), label: path },
-              actions: [],
-            };
-            routesByLabel.set(path, group);
-          }
-          if (!group.actions.includes(action)) group.actions.push(action);
-          routes.push(group.route);
-        }
-        routesByAction.set(action, routes);
-      }
-
-      this.plans.set(entityName, {
-        actions,
-        actionSet: new Set(actions),
-        routesByAction,
-        routeGroups: [...routesByLabel.values()],
-      });
-    }
-  }
-
-  /**
-   * Validates that all permission paths reference relations that exist in the entity.
-   * Called once during construction to catch schema typos early.
-   * @throws {ZanzoError} MISSING_RELATION if a permission path references an undefined relation.
-   */
-  private validateSchema(): void {
-    for (const [entityName, definition] of Object.entries(this.schema) as [string, any][]) {
-      if (!definition.permissions || !definition.relations) continue;
-
-      const definedRelations = new Set(Object.keys(definition.relations));
-
-      for (const [action, paths] of Object.entries(definition.permissions) as [string, string[]][]) {
-        if (!Array.isArray(paths)) continue;
-
-        for (const path of paths) {
-          const segments = path.split(RELATION_PATH_SEPARATOR);
-          // The first segment of the path is the relation name (e.g. 'workspace' in 'workspace.admin')
-          const firstSegment = segments[0]!;
-
-          if (!definedRelations.has(firstSegment)) {
-            throw new ZanzoError(
-              ZanzoErrorCode.MISSING_RELATION,
-              `[Zanzo] Missing relation: Entity "${entityName}" permission "${action}" references ` +
-              `relation "${firstSegment}" (in path "${path}"), but this relation is not defined ` +
-              `in the entity's relations map. Defined relations: [${[...definedRelations].join(', ')}].`
-            );
-          }
-
-          // Follow the remaining segments through the target entity types. Only entities
-          // declared in the schema can be checked; unknown target types are left unvalidated.
-          let currentType = definition.relations[firstSegment] as string;
-          for (let i = 1; i < segments.length; i++) {
-            const targetDefinition = (this.schema as Record<string, any>)[currentType];
-            if (!targetDefinition) break;
-            const segment = segments[i]!;
-            const targetRelations = targetDefinition.relations ?? {};
-            if (!Object.prototype.hasOwnProperty.call(targetRelations, segment)) {
-              throw new ZanzoError(
-                ZanzoErrorCode.MISSING_RELATION,
-                `[Zanzo] Missing relation: Entity "${entityName}" permission "${action}" path "${path}" ` +
-                `references relation "${segment}" on entity "${currentType}", but it is not defined there. ` +
-                `Defined relations: [${Object.keys(targetRelations).join(', ')}].`
-              );
-            }
-            currentType = targetRelations[segment];
-          }
-        }
-      }
-    }
+    this.compiled = compileSchema(schema);
   }
 
   // ─── Cache API ────────────────────────────────────────────────────
@@ -274,7 +193,11 @@ export class ZanzoEngine<TSchema extends SchemaData> {
    */
   public getCandidateObjects(actor: string): ReadonlySet<string> {
     const candidates = this.collectAncestors(actor)!;
+    // Objects shared publicly with `Type:*` are candidates for every actor of that type
+    const wildcard = `${typeOf(actor)}:*`;
+    for (const object of this.collectAncestors(wildcard)!) candidates.add(object);
     candidates.delete(actor);
+    candidates.delete(wildcard);
     return candidates;
   }
 
@@ -431,10 +354,25 @@ export class ZanzoEngine<TSchema extends SchemaData> {
 
     subjectsSet.add(tuple.subject);
 
-    let parents = this.reverseIndex.get(tuple.subject);
+    if (isIndirectSubject(tuple.subject)) {
+      let indirectRelations = this.indirectIndex.get(tuple.object);
+      if (!indirectRelations) {
+        indirectRelations = new Map<string, Set<string>>();
+        this.indirectIndex.set(tuple.object, indirectRelations);
+      }
+      let indirect = indirectRelations.get(tuple.relation);
+      if (!indirect) {
+        indirect = new Set<string>();
+        indirectRelations.set(tuple.relation, indirect);
+      }
+      indirect.add(tuple.subject);
+    }
+
+    const subjectKey = subjectObject(tuple.subject);
+    let parents = this.reverseIndex.get(subjectKey);
     if (!parents) {
       parents = new Set<string>();
-      this.reverseIndex.set(tuple.subject, parents);
+      this.reverseIndex.set(subjectKey, parents);
     }
     parents.add(tuple.object);
 
@@ -541,18 +479,30 @@ export class ZanzoEngine<TSchema extends SchemaData> {
           this.index.delete(tuple.object);
         }
 
-        // Drop the reverse edge only if no other relation still links object → subject
+        if (isIndirectSubject(tuple.subject)) {
+          const indirectRelations = this.indirectIndex.get(tuple.object);
+          const indirect = indirectRelations?.get(tuple.relation);
+          indirect?.delete(tuple.subject);
+          if (indirect?.size === 0) indirectRelations!.delete(tuple.relation);
+          if (indirectRelations?.size === 0) this.indirectIndex.delete(tuple.object);
+        }
+
+        // Drop the reverse edge only if no other tuple still links object → subject's object
+        const subjectKey = subjectObject(tuple.subject);
         let stillLinked = false;
         for (const subjects of objectRelations.values()) {
-          if (subjects.has(tuple.subject)) {
-            stillLinked = true;
-            break;
+          for (const subject of subjects) {
+            if (subjectObject(subject) === subjectKey) {
+              stillLinked = true;
+              break;
+            }
           }
+          if (stillLinked) break;
         }
         if (!stillLinked) {
-          const parents = this.reverseIndex.get(tuple.subject);
+          const parents = this.reverseIndex.get(subjectKey);
           parents?.delete(tuple.object);
-          if (parents?.size === 0) this.reverseIndex.delete(tuple.subject);
+          if (parents?.size === 0) this.reverseIndex.delete(subjectKey);
         }
       }
     }
@@ -598,6 +548,7 @@ export class ZanzoEngine<TSchema extends SchemaData> {
   public clearTuples(): void {
     this.index.clear();
     this.reverseIndex.clear();
+    this.indirectIndex.clear();
     this.tupleStore.clear();
     this.expiryIndex.clear();
     this.nextExpiry = Number.POSITIVE_INFINITY;
@@ -681,10 +632,8 @@ export class ZanzoEngine<TSchema extends SchemaData> {
    * PERF-2: Evaluates ALL actions for a given actor on a specific resource in a
    * single pass. Returns the list of granted actions.
    *
-   * This is more efficient than calling can() per action because:
-   * - Identical routes shared by multiple actions are evaluated only once
-   * - Early exit when all actions are already resolved
-   * - Only one validation pass per (actor, resource) pair
+   * Sub-results (`object#relation`) are shared across the actions of the pass, so
+   * routes common to several actions are evaluated once.
    *
    * @internal This method is public solely because `createZanzoSnapshot` (in compiler/)
    * requires access to it. It is NOT part of the public API contract and may change
@@ -697,60 +646,24 @@ export class ZanzoEngine<TSchema extends SchemaData> {
     const now = Date.now();
     this.syncCacheWithExpirations(now);
 
-    const plan = this.planFor(resource);
-    if (!plan || plan.actions.length === 0) return [];
-    const { actions } = plan;
+    const type = this.typeFor(resource);
+    if (!type || type.actions.length === 0) return [];
 
-    // ── Cache fast-path: resolve as many actions as possible from cache ──
-    const grantedActions = new Set<string>();
-    let pending: Set<string>;
-
-    if (this.cache) {
-      pending = new Set<string>();
-      for (const action of actions) {
-        const cached = this.cache.get(actor, action, resource);
-        if (cached === true) {
-          grantedActions.add(action);
-        } else if (cached === undefined) {
-          pending.add(action);
-        }
-        // cached === false → explicitly denied, skip evaluation
+    const granted: string[] = [];
+    const ctx = this.createContext(actor, now);
+    for (const action of type.actions) {
+      const cached = this.cache?.get(actor, action, resource);
+      let allowed: boolean;
+      if (cached !== undefined) {
+        allowed = cached;
+      } else {
+        const node = type.permissions.get(action);
+        allowed = node ? this.evalNode(resource, node, ctx) : false;
+        this.cache?.set(actor, action, resource, allowed);
       }
-
-      if (pending.size === 0) {
-        return actions.filter(a => grantedActions.has(a));
-      }
-    } else {
-      pending = plan.actionSet;
+      if (allowed) granted.push(action);
     }
-
-    // Each distinct route is evaluated once and its result applied to every action using it
-    for (const { route, actions: routeActions } of plan.routeGroups) {
-      let needed = false;
-      for (const action of routeActions) {
-        if (pending.has(action) && !grantedActions.has(action)) {
-          needed = true;
-          break;
-        }
-      }
-      if (!needed) continue;
-
-      if (this.checkRoute(actor, route, 0, resource, new Set<string>(), undefined, now)) {
-        for (const action of routeActions) {
-          if (pending.has(action)) grantedActions.add(action);
-        }
-        if (grantedActions.size === actions.length) break;
-      }
-    }
-
-    if (this.cache) {
-      for (const action of pending) {
-        this.cache.set(actor, action, resource, grantedActions.has(action));
-      }
-    }
-
-    // Return in original action order to maintain deterministic output
-    return actions.filter(a => grantedActions.has(a));
+    return granted;
   }
 
   /**
@@ -772,8 +685,10 @@ export class ZanzoEngine<TSchema extends SchemaData> {
     this.validateInput(actor, 'actor');
     this.validateInput(resource, 'resource');
 
-    const routes = this.planFor(resource)?.routesByAction.get(action as string);
-    if (!routes) return false;
+    const type = this.typeFor(resource);
+    if (!type || !type.actionSet.has(action as string)) return false;
+    const node = type.permissions.get(action as string);
+    if (!node) return false;
 
     const now = Date.now();
     this.syncCacheWithExpirations(now);
@@ -783,77 +698,9 @@ export class ZanzoEngine<TSchema extends SchemaData> {
       if (cached !== undefined) return cached;
     }
 
-    let result = false;
-    const visited = new Set<string>();
-    for (const route of routes) {
-      if (this.checkRoute(actor, route, 0, resource, visited, undefined, now)) {
-        result = true;
-        break;
-      }
-    }
-
+    const result = this.evalNode(resource, node, this.createContext(actor, now));
     this.cache?.set(actor, action as string, resource, result);
     return result;
-  }
-
-  /**
-   * Resolves the compiled plan for a resource identifier. Field-level resources
-   * (e.g. `Review:cert1#strengths`) use the plan of their base entity type.
-   */
-  private planFor(resource: string): CompiledEntityPlan | undefined {
-    const hashIndex = resource.indexOf(FIELD_SEPARATOR);
-    const baseResource = hashIndex === -1 ? resource : resource.substring(0, hashIndex);
-    return this.plans.get(parseEntityRef(baseResource).type);
-  }
-
-  /**
-   * Evaluates one compiled route starting at `parts[offset]` on `target`.
-   * Walks the index from object to subject without allocating route copies;
-   * `visited` memoizes (node, route, offset) states so cycles and diamonds are explored once.
-   */
-  private checkRoute(
-    actor: string,
-    route: CompiledRoute,
-    offset: number,
-    target: string,
-    visited: Set<string>,
-    trace: TraceStep[] | undefined,
-    now: number,
-  ): boolean {
-    if (offset > MAX_DEPTH) {
-      throw new ZanzoError(ZanzoErrorCode.MAX_DEPTH_EXCEEDED, `[Zanzo] Security Exception: Maximum relationship depth of ${MAX_DEPTH} exceeded. Graph might contain an infinite cycle or is too heavily nested.`);
-    }
-
-    const visitKey = `${target}|${route.id}|${offset}`;
-    if (visited.has(visitKey)) return false;
-    visited.add(visitKey);
-
-    const relation = route.parts[offset]!;
-    const subjects = this.index.get(target)?.get(relation);
-
-    if (!subjects || subjects.size === 0) {
-      trace?.push({ path: routeLabel(route, offset), target, found: false, subjects: [] });
-      return false;
-    }
-
-    if (offset === route.parts.length - 1) {
-      // Direct relation base case check O(1)
-      const found = subjects.has(actor) && !this.isExpired(actor, relation, target, now);
-      trace?.push({ path: routeLabel(route, offset), target, found, subjects: [...subjects] });
-      return found;
-    }
-
-    let found = false;
-    for (const intermediateSubject of subjects) {
-      if (this.isExpired(intermediateSubject, relation, target, now)) continue;
-      if (this.checkRoute(actor, route, offset + 1, intermediateSubject, visited, trace, now)) {
-        found = true;
-        break;
-      }
-    }
-
-    trace?.push({ path: routeLabel(route, offset), target, found, subjects: [...subjects] });
-    return found;
   }
 
   /**
@@ -869,20 +716,137 @@ export class ZanzoEngine<TSchema extends SchemaData> {
     this.validateInput(resource, 'resource');
 
     const trace: TraceStep[] = [];
-    const routes = this.planFor(resource)?.routesByAction.get(action);
-    if (!routes) return { allowed: false, trace };
+    const type = this.typeFor(resource);
+    const node = type?.actionSet.has(action) ? type.permissions.get(action) : undefined;
+    if (!node) return { allowed: false, trace };
 
-    const now = Date.now();
-    const visited = new Set<string>();
-    let allowed = false;
-    for (const route of routes) {
-      if (this.checkRoute(actor, route, 0, resource, visited, trace, now)) {
-        allowed = true;
-        break;
+    const ctx = this.createContext(actor, Date.now());
+    ctx.trace = trace;
+    return { allowed: this.evalNode(resource, node, ctx), trace };
+  }
+
+  /** Compiled type of a resource; field-level resources (`Review:1#strengths`) use their entity type. */
+  private typeFor(resource: string): CompiledType | undefined {
+    return this.compiled.types.get(typeOf(resource));
+  }
+
+  private createContext(actor: string, now: number): EvalContext {
+    return { actor, actorType: typeOf(actor), now, depth: 0, cycleHits: 0 };
+  }
+
+  /** Evaluates a rewrite node on `object`. */
+  private evalNode(object: string, node: Node, ctx: EvalContext): boolean {
+    switch (node.kind) {
+      case 'name': {
+        const result = this.evalName(object, node.name, ctx);
+        if (ctx.trace) {
+          const subjects = this.index.get(object)?.get(node.name);
+          ctx.trace.push({ path: node.label, target: object, found: result, subjects: subjects ? [...subjects] : [] });
+        }
+        return result;
       }
+      case 'arrow': {
+        const subjects = this.index.get(object)?.get(node.tupleset);
+        let found = false;
+        if (subjects) {
+          for (const subject of subjects) {
+            // tuple_to_userset follows concrete objects only
+            if (isIndirectSubject(subject)) continue;
+            if (this.isExpired(subject, node.tupleset, object, ctx.now)) continue;
+            if (this.descend(subject, node.then, ctx)) {
+              found = true;
+              break;
+            }
+          }
+        }
+        ctx.trace?.push({ path: node.label, target: object, found, subjects: subjects ? [...subjects] : [] });
+        return found;
+      }
+      case 'union':
+        for (const child of node.children) if (this.evalNode(object, child, ctx)) return true;
+        return false;
+      case 'intersection':
+        for (const child of node.children) if (!this.evalNode(object, child, ctx)) return false;
+        return true;
+      case 'exclusion':
+        return this.evalNode(object, node.base, ctx) && !this.evalNode(object, node.subtract, ctx);
+    }
+  }
+
+  /** Evaluates a node on another object one hop away, enforcing the depth limit. */
+  private descend(object: string, node: Node, ctx: EvalContext): boolean {
+    if (++ctx.depth > MAX_DEPTH) {
+      throw new ZanzoError(ZanzoErrorCode.MAX_DEPTH_EXCEEDED, `[Zanzo] Security Exception: Maximum relationship depth of ${MAX_DEPTH} exceeded. Graph might contain an infinite cycle or is too heavily nested.`);
+    }
+    try {
+      return this.evalNode(object, node, ctx);
+    } finally {
+      ctx.depth--;
+    }
+  }
+
+  /**
+   * Evaluates relation or permission `name` on `object`. Relations take precedence over
+   * permissions with the same name.
+   */
+  private evalName(object: string, name: string, ctx: EvalContext): boolean {
+    const type = this.compiled.types.get(typeOf(object));
+    if (!type) return false;
+    if (type.relations.has(name)) return this.evalRelation(object, name, ctx);
+    const node = type.permissions.get(name);
+    return node ? this.memoized(`${object}#${name}`, ctx, () => this.evalNode(object, node, ctx)) : false;
+  }
+
+  /** Direct subjects, public wildcards and usersets of `object#relation`. */
+  private evalRelation(object: string, relation: string, ctx: EvalContext): boolean {
+    const subjects = this.index.get(object)?.get(relation);
+    if (!subjects) return false;
+    if (subjects.has(ctx.actor) && !this.isExpired(ctx.actor, relation, object, ctx.now)) return true;
+
+    const indirect = this.indirectIndex.get(object)?.get(relation);
+    if (!indirect) return false;
+    // Usersets can form cycles (groups containing each other), so their expansion is memoized
+    return this.memoized(`${object}#${relation}`, ctx, () => {
+      for (const subject of indirect) {
+        if (this.isExpired(subject, relation, object, ctx.now)) continue;
+        if (subject.endsWith(':*')) {
+          if (typeOf(subject) === ctx.actorType) return true;
+          continue;
+        }
+        const hash = subject.indexOf('#');
+        const usersetName: Node = { kind: 'name', name: subject.substring(hash + 1), label: subject };
+        if (this.descend(subject.substring(0, hash), usersetName, ctx)) return true;
+      }
+      return false;
+    });
+  }
+
+  /**
+   * Memoizes `compute` for the current pass. A key reached again while being computed is a
+   * cycle and evaluates to false (least fixpoint); false results computed while a cycle was
+   * cut depend on the cut and are not memoized.
+   */
+  private memoized(key: string, ctx: EvalContext, compute: () => boolean): boolean {
+    const memo = (ctx.memo ??= new Map());
+    const known = memo.get(key);
+    if (known !== undefined) {
+      if (known === IN_PROGRESS) {
+        ctx.cycleHits++;
+        return false;
+      }
+      return known === 1;
     }
 
-    return { allowed, trace };
+    memo.set(key, IN_PROGRESS);
+    const cycleHitsBefore = ctx.cycleHits;
+    let result = false;
+    try {
+      result = compute();
+    } finally {
+      if (result || ctx.cycleHits === cycleHitsBefore) memo.set(key, result ? 1 : 0);
+      else memo.delete(key);
+    }
+    return result;
   }
 
   /**
@@ -909,43 +873,91 @@ export class ZanzoEngine<TSchema extends SchemaData> {
     this.validateInput(actor, 'actor');
     this.validateInput(resourceType as string, 'resourceType');
 
-    const resourceSchema = this.schema[resourceType];
+    const type = this.compiled.types.get(resourceType as string);
+    const node = type?.actionSet.has(action as string) ? type.permissions.get(action as string) : undefined;
+    if (!type || !node) return null;
 
-    if (!resourceSchema || !resourceSchema.actions.includes(action as any)) {
-      return null;
-    }
-
-    const allowedRelationsForAction = (resourceSchema.permissions?.[action] || []) as string[];
-
-    if (allowedRelationsForAction.length === 0) {
-      return null;
-    }
+    const paths = this.pathsFor(type, node, new Set([`${type.name}#${action as string}`]));
+    if (paths.length === 0) return null;
 
     // Build the underlying AST based on allowed relation paths
-    const conditions = allowedRelationsForAction.map(
-      (routeLine): import('../ast/index').Condition => {
-        const parts = routeLine.split(RELATION_PATH_SEPARATOR);
-
-        if (parts.length === 1) {
-          return {
-            type: 'direct',
-            relation: parts[0] as string,
-            targetSubject: actor,
-          };
-        }
-
-        return {
-          type: 'nested',
-          relation: parts[0] as string,
-          nextRelationPath: parts.slice(1),
-          targetSubject: actor,
-        };
-      },
+    const conditions = paths.map((parts): import('../ast/index').Condition =>
+      parts.length === 1
+        ? { type: 'direct', relation: parts[0]!, targetSubject: actor }
+        : { type: 'nested', relation: parts[0]!, nextRelationPath: parts.slice(1), targetSubject: actor },
     );
 
     return {
       operator: 'OR', // ReBAC normally operates on union of granted authority paths
       conditions,
     };
+  }
+
+  /**
+   * Flattens a permission into the relation paths the SQL adapter matches, inlining computed
+   * permissions. Only unions of paths over concrete subjects can be expressed this way.
+   *
+   * @throws {ZanzoError} UNSUPPORTED_FEATURE for intersections, exclusions, recursive
+   *   permissions, usersets or wildcards.
+   */
+  private pathsFor(type: CompiledType, node: Node, stack: Set<string>): string[][] {
+    const unsupported = (what: string) =>
+      new ZanzoError(
+        ZanzoErrorCode.UNSUPPORTED_FEATURE,
+        `[Zanzo] The SQL adapter cannot evaluate ${what} (entity "${type.name}") yet. ` +
+        `Check these permissions with ZanzoEngine instead.`,
+      );
+    const dedupe = (paths: string[][]) => {
+      const seen = new Set<string>();
+      return paths.filter((p) => {
+        const key = p.join(RELATION_PATH_SEPARATOR);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    };
+
+    switch (node.kind) {
+      case 'name': {
+        const allowed = type.relations.get(node.name);
+        if (allowed) {
+          if (allowed.some((s) => s.wildcard || s.relation !== undefined)) {
+            throw unsupported(`usersets or wildcards in relation "${node.name}"`);
+          }
+          return [[node.name]];
+        }
+        const permission = type.permissions.get(node.name);
+        if (!permission) return [];
+        const key = `${type.name}#${node.name}`;
+        if (stack.has(key)) throw unsupported(`the recursive permission "${node.name}"`);
+        stack.add(key);
+        try {
+          return this.pathsFor(type, permission, stack);
+        } finally {
+          stack.delete(key);
+        }
+      }
+      case 'arrow': {
+        const allowed = type.relations.get(node.tupleset) ?? [];
+        const paths: string[][] = [];
+        for (const subject of allowed) {
+          if (subject.wildcard || subject.relation !== undefined) continue;
+          const target = this.compiled.types.get(subject.type);
+          if (!target) {
+            // Undeclared subject type: keep the literal path (legacy behaviour)
+            if (node.then.kind === 'name') paths.push([node.tupleset, node.then.name]);
+            continue;
+          }
+          for (const rest of this.pathsFor(target, node.then, stack)) paths.push([node.tupleset, ...rest]);
+        }
+        return dedupe(paths);
+      }
+      case 'union':
+        return dedupe(node.children.flatMap((child) => this.pathsFor(type, child, stack)));
+      case 'intersection':
+        throw unsupported('intersections (&)');
+      case 'exclusion':
+        throw unsupported('exclusions (-)');
+    }
   }
 }

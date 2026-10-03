@@ -65,7 +65,9 @@ export async function _walkExpansionGraph(
 
       const matchingRelations: string[] = [];
       for (const [relName, relTarget] of Object.entries(definition.relations)) {
-        if (relTarget === objectType) {
+        // Relations may accept several subject types; usersets and wildcards are not materialized
+        const targets = Array.isArray(relTarget) ? relTarget : [relTarget];
+        if (targets.includes(objectType)) {
           matchingRelations.push(relName);
         }
       }

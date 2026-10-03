@@ -3,6 +3,7 @@ import { defineConformanceSuite } from '../conformance/runner';
 import { Oracle } from '../conformance/oracle';
 import { parseExpr } from '../conformance/model';
 import { legacyEngineFactory, legacyCachedEngineFactory, legacySnapshotFactory } from '../conformance/legacy-engine';
+import { nativeEngineFactory, nativeCachedEngineFactory, nativeSnapshotFactory } from '../conformance/native-engine';
 
 // The oracle supports the full model; passing here validates the cases themselves.
 defineConformanceSuite({
@@ -19,6 +20,11 @@ defineConformanceSuite({
 defineConformanceSuite(legacyEngineFactory);
 defineConformanceSuite(legacyCachedEngineFactory);
 defineConformanceSuite(legacySnapshotFactory);
+
+// The full model through the expression syntax
+defineConformanceSuite(nativeEngineFactory);
+defineConformanceSuite(nativeCachedEngineFactory);
+defineConformanceSuite(nativeSnapshotFactory);
 
 describe('conformance expression parser', () => {
   it('applies precedence: - loosest, then |, then &', () => {

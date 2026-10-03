@@ -47,4 +47,15 @@ describe('Zanzo CLI check command — Soft warnings', () => {
     const logs = consoleLogSpy.mock.calls.map(c => c[0]).join('\n');
     expect(logs).toContain('Completed with 4 warnings');
   });
+
+  it('understands the expression syntax: arrows, exclusions, usersets and wildcards', async () => {
+    await checkCommand(join(__dirname, 'fixtures/expression-schema.ts'));
+
+    expect(processExitSpy).toHaveBeenCalledWith(0);
+    const output = [...consoleWarnSpy.mock.calls, ...consoleLogSpy.mock.calls].map(c => String(c[0] ?? '')).join('\n');
+    expect(output).not.toContain('Missing Relation');
+    expect(output).not.toContain('Unused Relation');
+    // Group and User are referenced through 'Group#member' and 'User:*'
+    expect(output).not.toContain('[Group]');
+  });
 });

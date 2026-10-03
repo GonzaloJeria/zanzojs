@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ZanzoBuilder, mergeSchemas, ZanzoEngine, SchemaData } from '../src/index';
+import { ZanzoBuilder, mergeSchemas, ZanzoEngine } from '../src/index';
 
 describe('Zanzo Schema Composition Feature', () => {
 

@@ -121,3 +121,109 @@ export function randomWorld(r: Rng, now: number): RandomWorld {
 
   return { schema, tuples, users, targets, writable };
 }
+
+/**
+ * Generates a random world over the full model: relations with several subject types,
+ * usersets (nested and cyclic groups), public wildcards, intersections, exclusions and
+ * recursive tuple-to-userset permissions.
+ */
+export function randomFullWorld(r: Rng, now: number): RandomWorld {
+  const types = ['A', 'B', 'C'].slice(0, 2 + r.int(2));
+  const schema: NeutralSchema = {
+    User: {},
+    Group: { relations: { member: ['User', 'Group#member'] } },
+  };
+  const subjectChoices = ['User', 'User:*', 'Group#member', ...types];
+  const relationsOf: Record<string, Record<string, string[]>> = {};
+
+  for (const type of types) {
+    const relations: Record<string, string[]> = {};
+    const count = 2 + r.int(3);
+    for (let i = 0; i < count; i++) {
+      const allowed = new Set<string>([r.pick(subjectChoices)]);
+      if (r.chance(0.4)) allowed.add(r.pick(subjectChoices));
+      relations[`r${i}`] = [...allowed];
+    }
+    // Always keep one plain user relation, used by exclusions
+    relations['banned'] = ['User'];
+    relationsOf[type] = relations;
+  }
+
+  const permissionNames = ['p0', 'p1', 'p2'];
+  const countOf: Record<string, number> = Object.fromEntries(types.map((t) => [t, 1 + r.int(3)]));
+
+  for (const type of types) {
+    const relations = relationsOf[type]!;
+    const relationNames = Object.keys(relations).filter((n) => n !== 'banned');
+    const permissions: Record<string, string> = {};
+
+    for (let p = 0; p < countOf[type]!; p++) {
+      const term = (): string => {
+        const relation = r.pick(relationNames);
+        const concrete = relations[relation]!.filter((s) => types.includes(s));
+        const roll = r.next();
+        if (roll < 0.35 || concrete.length === 0) return relation;
+        if (roll < 0.5 && p > 0) return `p${r.int(p)}`; // earlier permission: no computed cycles
+        // Arrow to any relation or permission of the target type, including recursion
+        const target = r.pick(concrete);
+        const targetNames = [...Object.keys(relationsOf[target]!), ...permissionNames.slice(0, countOf[target]!)];
+        return `${relation}->${r.pick(targetNames)}`;
+      };
+
+      const terms = Array.from({ length: 1 + r.int(3) }, term);
+      let expression = terms.join(r.chance(0.25) ? ' & ' : ' | ');
+      if (r.chance(0.25)) expression = `(${expression}) - banned`;
+      permissions[`p${p}`] = expression;
+    }
+
+    schema[type] = { relations, permissions };
+  }
+
+  const users = ['User:u0', 'User:u1', 'User:u2', 'User:u3'];
+  const groups = ['Group:g0', 'Group:g1', 'Group:g2'];
+  const objectsOf = (type: string) => [0, 1, 2].map((i) => `${type}:${type.toLowerCase()}${i}`);
+  const candidatesFor = (spec: string): string[] => {
+    if (spec === 'User') return users;
+    if (spec === 'User:*') return ['User:*'];
+    if (spec === 'Group#member') return groups.map((g) => `${g}#member`);
+    return objectsOf(spec);
+  };
+
+  const tuples: NeutralTuple[] = [];
+  const writable: RandomWorld['writable'] = [];
+  const seen = new Set<string>();
+  const add = (object: string, relation: string, subject: string) => {
+    const key = `${object}|${relation}|${subject}`;
+    if (seen.has(key) || subject === object) return;
+    seen.add(key);
+    const tuple: NeutralTuple = { object, relation, subject };
+    if (r.chance(0.1)) tuple.expiresAt = r.chance(0.5) ? now - 60_000 : now + 3_600_000;
+    tuples.push(tuple);
+  };
+
+  // Group membership, including nested and cyclic groups
+  for (const group of groups) {
+    const candidates = [...users, ...groups.filter((g) => g !== group).map((g) => `${g}#member`)];
+    writable.push([group, 'member', candidates]);
+    for (const subject of candidates) if (r.chance(0.3)) add(group, 'member', subject);
+  }
+
+  for (const type of types) {
+    for (const object of objectsOf(type)) {
+      for (const [relation, allowed] of Object.entries(relationsOf[type]!)) {
+        const candidates = allowed.flatMap(candidatesFor).filter((s) => s !== object);
+        writable.push([object, relation, candidates]);
+        for (const subject of candidates) if (r.chance(subject === 'User:*' ? 0.15 : 0.25)) add(object, relation, subject);
+      }
+    }
+  }
+
+  const targets: RandomWorld['targets'] = [];
+  for (const type of types) {
+    for (const object of objectsOf(type)) {
+      for (const permission of Object.keys(schema[type]!.permissions!)) targets.push([object, permission]);
+    }
+  }
+
+  return { schema, tuples, users, targets, writable };
+}
