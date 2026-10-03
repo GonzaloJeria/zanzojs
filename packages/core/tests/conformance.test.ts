@@ -13,6 +13,7 @@ defineConformanceSuite({
     return {
       check: (object, permission, subject) => oracle.check(object, permission, subject),
       lookupResources: (type, permission, subject) => oracle.lookupResources(type, permission, subject),
+      lookupSubjects: (object, permission, subjectType) => oracle.lookupSubjects(object, permission, subjectType),
     };
   },
 });

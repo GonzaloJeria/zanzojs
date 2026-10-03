@@ -25,12 +25,8 @@ export function createNativeEngine(schema: NeutralSchema, tuples: NeutralTuple[]
 
 const engineEvaluator = (engine: ZanzoEngine<any>): Evaluator => ({
   check: (object, permission, subject) => engine.can(subject, permission as never, object as never),
-  lookupResources: (type, permission, subject) =>
-    engine
-      .forAny(subject)
-      .listAccessible(type as never)
-      .filter((r) => r.actions.includes(permission))
-      .map((r) => r.object),
+  lookupSubjects: (object, permission, subjectType) => engine.lookupSubjects(object as never, permission as never, subjectType),
+  lookupResources: (type, permission, subject) => engine.lookupResources(subject, permission as never, type as never),
 });
 
 export const nativeEngineFactory: EvaluatorFactory = {

@@ -55,6 +55,36 @@ interface TypePlan {
   permissionsById: Map<number, Node>;
 }
 
+/** Result of `engine.lookupSubjects()`. */
+export interface LookupSubjectsResult {
+  /** Concrete subjects that have the permission */
+  subjects: string[];
+  /** True when every subject of the type has the permission (granted through `Type:*`) */
+  wildcard: boolean;
+  /** When `wildcard`, related subjects that are still denied */
+  excluded: string[];
+}
+
+/** Result of `engine.expand()`: the rules and subjects that grant a permission. */
+export type ExpandTree =
+  /** Direct subjects of a relation, including unexpanded usersets and wildcards */
+  | { type: 'leaf'; object: string; relation: string; subjects: string[] }
+  /** A permission referenced by name */
+  | { type: 'computed'; object: string; permission: string; child: ExpandTree }
+  /** `tupleset->...`: one child per subject of the tupleset relation */
+  | { type: 'arrow'; object: string; tupleset: string; children: ExpandTree[] }
+  | { type: 'union' | 'intersection'; children: ExpandTree[] }
+  | { type: 'exclusion'; base: ExpandTree; subtract: ExpandTree }
+  /** A permission reached again while expanding itself */
+  | { type: 'cycle'; object: string; permission: string };
+
+/** Filter for `engine.read()`. Omitted fields match anything. */
+export interface TupleFilter {
+  object?: string;
+  relation?: string;
+  subject?: string;
+}
+
 /**
  * Represents a logical ReBAC relational tuple binding a Subject to an Object via a Relation.
  * Example: User:1 is the 'owner' of Project:A
@@ -685,6 +715,219 @@ export class ZanzoEngine<TSchema extends SchemaData> {
     const ctx = this.createContext(actor, Date.now());
     ctx.trace = trace;
     return { allowed: this.evalNode(object, node, ctx), trace };
+  }
+
+  // ─── Lookups, Expand and Read ─────────────────────────────────────
+
+  /**
+   * LookupResources: every resource of `resourceType` on which `actor` has `action`.
+   *
+   * Candidates come from walking the relation graph upward from the actor (and from its
+   * type's public wildcard) with the reverse index, then each candidate is checked. The cost
+   * is proportional to the part of the graph the actor reaches, not to the stored tuples.
+   *
+   * @example
+   * engine.lookupResources('User:alice', 'view', 'Document') // ['Document:1', 'Document:7']
+   */
+  public lookupResources<TResourceName extends Extract<ExtractSchemaResources<TSchema>, string>>(
+    actor: string,
+    action: ExtractSchemaActions<TSchema, TResourceName> & string,
+    resourceType: TResourceName,
+  ): string[] {
+    this.validateRef(actor, 'actor');
+    const prefix = `${resourceType}:`;
+    const resources: string[] = [];
+    for (const object of this.getCandidateObjects(actor)) {
+      if (object.startsWith(prefix) && this.can(actor, action as never, object as never)) resources.push(object);
+    }
+    return resources;
+  }
+
+  /**
+   * LookupSubjects: which subjects of `subjectType` have `action` on `resource`.
+   *
+   * - `subjects`: concrete subjects related to the resource (directly, through parents or
+   *   groups) that pass the check;
+   * - `wildcard`: true when every subject of the type passes, granted through `Type:*`;
+   * - `excluded`: when `wildcard`, the related subjects that are still denied (for example
+   *   by an exclusion such as `viewer - banned`).
+   *
+   * @example
+   * engine.lookupSubjects('Document:1', 'view', 'User')
+   * // { subjects: ['User:alice', 'User:bob'], wildcard: false, excluded: [] }
+   */
+  public lookupSubjects<TResourceName extends Extract<ExtractSchemaResources<TSchema>, string>>(
+    resource: `${TResourceName}:${string}`,
+    action: ExtractSchemaActions<TSchema, TResourceName> & string,
+    subjectType: Extract<ExtractSchemaResources<TSchema>, string>,
+  ): LookupSubjectsResult {
+    this.validateRef(resource, 'resource');
+    const result: LookupSubjectsResult = { subjects: [], wildcard: false, excluded: [] };
+
+    const plan = this.planFor(resource);
+    const node = plan?.type.actionSet.has(action) ? plan.type.permissions.get(action) : undefined;
+    const object = this.store.entities.get(resource);
+    if (!node || object === undefined) return result;
+
+    const store = this.store;
+    const now = Date.now();
+    const typeId = store.types.get(subjectType);
+
+    // Candidates: subjects of the type reachable downward from the resource
+    const candidates: number[] = [];
+    const seen = new Set<number>([object]);
+    const queue = [object];
+    for (let cursor = 0; cursor < queue.length; cursor++) {
+      for (let e = store.forwardHead[queue[cursor]!]!; e !== NONE; e = store.forwardNext[e]!) {
+        const subject = store.edgeSubject[e]!;
+        // Wildcards relate no concrete subject; expired tuples relate nothing
+        if (store.kind[subject] === KIND_WILDCARD || this.isExpired(e, now)) continue;
+        const next = store.reverseKey(subject);
+        if (seen.has(next)) continue;
+        seen.add(next);
+        queue.push(next);
+        if (store.entityType[next] === typeId && store.kind[next] === KIND_OBJECT) candidates.push(next);
+      }
+    }
+
+    const evaluate = (actor: number) =>
+      this.evalNode(object, node, { actor, actorType: typeId ?? NONE, now, depth: 0, cycleHits: 0 });
+
+    for (const candidate of candidates) {
+      if (evaluate(candidate)) result.subjects.push(store.entities.values[candidate]!);
+    }
+    // A subject that appears in no tuple can only be granted through `Type:*`
+    if (typeId !== undefined && evaluate(NONE)) {
+      result.wildcard = true;
+      const granted = new Set(result.subjects);
+      for (const candidate of candidates) {
+        const ref = store.entities.values[candidate]!;
+        if (!granted.has(ref)) result.excluded.push(ref);
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Expand: the tree of rules and subjects that grant `action` on `resource`, mirroring the
+   * permission definition. Relation leaves list their direct subjects, including usersets
+   * (`Group:eng#member`) and wildcards (`User:*`) without expanding them. Useful to debug
+   * and to explain why a subject has access.
+   */
+  public expand<TResourceName extends Extract<ExtractSchemaResources<TSchema>, string>>(
+    resource: `${TResourceName}:${string}`,
+    action: ExtractSchemaActions<TSchema, TResourceName> & string,
+  ): ExpandTree | null {
+    this.validateRef(resource, 'resource');
+    const plan = this.planFor(resource);
+    const node = plan?.type.actionSet.has(action) ? plan.type.permissions.get(action) : undefined;
+    if (!node) return null;
+
+    const object = this.store.entities.get(resource);
+    if (object === undefined) return { type: 'leaf', object: resource, relation: action, subjects: [] };
+    return this.expandNode(object, node, Date.now(), new Set(), 0);
+  }
+
+  private expandNode(object: number, node: Node, now: number, path: Set<number>, depth: number): ExpandTree {
+    if (depth > MAX_DEPTH) {
+      throw new ZanzoError(ZanzoErrorCode.MAX_DEPTH_EXCEEDED, `[Zanzo] Security Exception: Maximum relationship depth of ${MAX_DEPTH} exceeded while expanding.`);
+    }
+    const store = this.store;
+    const objectRef = store.entities.values[object]!;
+
+    switch (node.kind) {
+      case 'name': {
+        const plan = this.plans[store.entityType[object]!];
+        const name = node.nameId!;
+        if (!plan || plan.relationIds.has(name) || !plan.permissionsById.has(name)) {
+          const subjects: string[] = [];
+          for (let e = store.forwardHead[object]!; e !== NONE; e = store.forwardNext[e]!) {
+            if (store.edgeRelation[e] === name && !this.isExpired(e, now)) subjects.push(store.entities.values[store.edgeSubject[e]!]!);
+          }
+          return { type: 'leaf', object: objectRef, relation: node.name, subjects: subjects.reverse() };
+        }
+        const key = object * NAME_SPACE + name;
+        if (path.has(key)) return { type: 'cycle', object: objectRef, permission: node.name };
+        path.add(key);
+        try {
+          return { type: 'computed', object: objectRef, permission: node.name, child: this.expandNode(object, plan.permissionsById.get(name)!, now, path, depth) };
+        } finally {
+          path.delete(key);
+        }
+      }
+      case 'arrow': {
+        const children: ExpandTree[] = [];
+        for (let e = store.forwardHead[object]!; e !== NONE; e = store.forwardNext[e]!) {
+          if (store.edgeRelation[e] !== node.tuplesetId) continue;
+          const subject = store.edgeSubject[e]!;
+          if (store.kind[subject] !== KIND_OBJECT || this.isExpired(e, now)) continue;
+          children.push(this.expandNode(subject, node.then, now, path, depth + 1));
+        }
+        return { type: 'arrow', object: objectRef, tupleset: node.tupleset, children: children.reverse() };
+      }
+      case 'union':
+      case 'intersection':
+        return { type: node.kind, children: node.children.map((child) => this.expandNode(object, child, now, path, depth)) };
+      case 'exclusion':
+        return {
+          type: 'exclusion',
+          base: this.expandNode(object, node.base, now, path, depth),
+          subtract: this.expandNode(object, node.subtract, now, path, depth),
+        };
+    }
+  }
+
+  /**
+   * Read: the stored tuples matching a filter (any combination of object, relation and
+   * subject; no filter returns every tuple). Expired tuples that were not cleaned up are
+   * included with their `expiresAt`.
+   *
+   * @example
+   * engine.read({ object: 'Document:1' })              // every tuple on Document:1
+   * engine.read({ subject: 'User:alice', relation: 'owner' })
+   */
+  public read(filter: TupleFilter = {}): Tuple[] {
+    const store = this.store;
+    const toTuple = (e: number): Tuple => {
+      const tuple: Tuple = {
+        subject: store.entities.values[store.edgeSubject[e]!]!,
+        relation: store.names.values[store.edgeRelation[e]!]!,
+        object: store.entities.values[store.edgeObject[e]!]!,
+      };
+      const expiresAt = store.expiry.get(e);
+      if (expiresAt !== undefined) tuple.expiresAt = new Date(expiresAt);
+      return tuple;
+    };
+
+    const relation = filter.relation === undefined ? undefined : store.names.get(filter.relation);
+    if (filter.relation !== undefined && relation === undefined) return [];
+    const matches = (e: number) => relation === undefined || store.edgeRelation[e] === relation;
+    const tuples: Tuple[] = [];
+
+    if (filter.object !== undefined) {
+      const object = store.entities.get(filter.object);
+      if (object === undefined) return [];
+      const subject = filter.subject === undefined ? undefined : store.entities.get(filter.subject);
+      if (filter.subject !== undefined && subject === undefined) return [];
+      for (let e = store.forwardHead[object]!; e !== NONE; e = store.forwardNext[e]!) {
+        if (matches(e) && (subject === undefined || store.edgeSubject[e] === subject)) tuples.push(toTuple(e));
+      }
+      return tuples.reverse();
+    }
+
+    if (filter.subject !== undefined) {
+      const subject = store.entities.get(filter.subject);
+      if (subject === undefined) return [];
+      for (let e = store.reverseHead[store.reverseKey(subject)]!; e !== NONE; e = store.reverseNext[e]!) {
+        if (store.edgeSubject[e] === subject && matches(e)) tuples.push(toTuple(e));
+      }
+      return tuples.reverse();
+    }
+
+    store.forEachEdge((e) => {
+      if (matches(e)) tuples.push(toTuple(e));
+    });
+    return tuples;
   }
 
   /** Plan of a resource's type; field-level resources (`Review:1#strengths`) use their entity type. */

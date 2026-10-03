@@ -26,6 +26,13 @@ export interface LookupAssertion {
   expected: string[];
 }
 
+export interface SubjectLookupAssertion {
+  object: string;
+  permission: string;
+  subjectType: string;
+  expected: { subjects: string[]; wildcard?: boolean; excluded?: string[] };
+}
+
 export interface ConformanceCase {
   name: string;
   features: Feature[];
@@ -33,6 +40,7 @@ export interface ConformanceCase {
   tuples: NeutralTuple[];
   checks: CheckAssertion[];
   lookups?: LookupAssertion[];
+  subjectLookups?: SubjectLookupAssertion[];
 }
 
 const HOUR = 3_600_000;
@@ -160,6 +168,11 @@ export const conformanceCases: ConformanceCase[] = [
       { type: 'Document', permission: 'view', subject: 'User:victor', expected: ['Document:spec'] },
       { type: 'Document', permission: 'view', subject: 'User:nobody', expected: [] },
     ],
+    subjectLookups: [
+      { object: 'Document:spec', permission: 'edit', subjectType: 'User', expected: { subjects: ['User:alice', 'User:olivia', 'User:walter'] } },
+      { object: 'Document:spec', permission: 'view', subjectType: 'User', expected: { subjects: ['User:alice', 'User:olivia', 'User:victor', 'User:walter'] } },
+      { object: 'Document:pitch', permission: 'edit', subjectType: 'User', expected: { subjects: ['User:eve', 'User:olivia'] } },
+    ],
   },
   {
     name: 'a resource with several parents (diamond)',
@@ -219,6 +232,10 @@ export const conformanceCases: ConformanceCase[] = [
       ['Folder:a', 'view', 'User:bob', false],
     ],
     lookups: [{ type: 'Folder', permission: 'view', subject: 'User:bob', expected: ['Folder:b', 'Folder:c'] }],
+    subjectLookups: [
+      { object: 'Folder:c', permission: 'view', subjectType: 'User', expected: { subjects: ['User:alice', 'User:bob'] } },
+      { object: 'Folder:a', permission: 'view', subjectType: 'User', expected: { subjects: ['User:alice'] } },
+    ],
   },
   {
     name: 'recursive inheritance over cyclic data terminates',
@@ -262,6 +279,9 @@ export const conformanceCases: ConformanceCase[] = [
       ['Document:1', 'view', 'User:admin', false],
       ['Document:2', 'view', 'User:expiredAdmin', false],
     ],
+    subjectLookups: [
+      { object: 'Document:1', permission: 'view', subjectType: 'User', expected: { subjects: ['User:active'] } },
+    ],
   },
   {
     name: 'a relation accepting several subject types',
@@ -304,6 +324,9 @@ export const conformanceCases: ConformanceCase[] = [
       ['Document:1', 'view', 'User:carol', false],
     ],
     lookups: [{ type: 'Document', permission: 'view', subject: 'User:bob', expected: ['Document:1'] }],
+    subjectLookups: [
+      { object: 'Document:1', permission: 'view', subjectType: 'User', expected: { subjects: ['User:alice', 'User:bob'] } },
+    ],
   },
   {
     name: 'cyclic group membership terminates',
@@ -340,6 +363,11 @@ export const conformanceCases: ConformanceCase[] = [
       ['Document:public', 'view', 'User:anyone', true],
       ['Document:public', 'view', 'Bot:crawler', false],
       ['Document:private', 'view', 'User:anyone', false],
+    ],
+    subjectLookups: [
+      { object: 'Document:public', permission: 'view', subjectType: 'User', expected: { subjects: [], wildcard: true } },
+      { object: 'Document:private', permission: 'view', subjectType: 'User', expected: { subjects: ['User:alice'] } },
+      { object: 'Document:public', permission: 'view', subjectType: 'Bot', expected: { subjects: [] } },
     ],
   },
   {
@@ -382,6 +410,29 @@ export const conformanceCases: ConformanceCase[] = [
     checks: [
       ['Document:1', 'view', 'User:alice', true],
       ['Document:1', 'view', 'User:mallory', false],
+    ],
+    subjectLookups: [
+      { object: 'Document:1', permission: 'view', subjectType: 'User', expected: { subjects: ['User:alice'] } },
+    ],
+  },
+  {
+    name: 'public wildcard minus banned subjects',
+    features: ['wildcard', 'exclusion'],
+    schema: {
+      User: {},
+      Document: { relations: { viewer: ['User:*'], banned: ['User'] }, permissions: { view: 'viewer - banned' } },
+    },
+    tuples: [
+      { object: 'Document:1', relation: 'viewer', subject: 'User:*' },
+      { object: 'Document:1', relation: 'banned', subject: 'User:mallory' },
+    ],
+    checks: [
+      ['Document:1', 'view', 'User:anyone', true],
+      ['Document:1', 'view', 'User:mallory', false],
+    ],
+    lookups: [{ type: 'Document', permission: 'view', subject: 'User:anyone', expected: ['Document:1'] }],
+    subjectLookups: [
+      { object: 'Document:1', permission: 'view', subjectType: 'User', expected: { subjects: [], wildcard: true, excluded: ['User:mallory'] } },
     ],
   },
 ];

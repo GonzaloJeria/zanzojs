@@ -60,6 +60,35 @@ describe('randomized conformance on the full model (usersets, wildcards, &, -, r
     }
   });
 
+  it('lookupResources and lookupSubjects agree with the oracle', () => {
+    for (let seed = 1; seed <= SEEDS; seed++) {
+      const world = randomFullWorld(rng(seed), now);
+      const engine = createNativeEngine(world.schema, world.tuples);
+      const oracle = new Oracle(world.schema, world.tuples, now);
+
+      for (const [object, permission] of world.targets) {
+        const actual = engine.lookupSubjects(object as never, permission as never, 'User' as never);
+        const expected = oracle.lookupSubjects(object, permission, 'User');
+        expect(
+          { subjects: [...actual.subjects].sort(), wildcard: actual.wildcard, excluded: [...actual.excluded].sort() },
+          `seed ${seed} lookupSubjects ${object}#${permission}`,
+        ).toEqual(expected);
+      }
+
+      const types = Object.keys(world.schema).filter((t) => t !== 'User' && t !== 'Group');
+      for (const user of world.users) {
+        for (const type of types) {
+          for (const permission of Object.keys(world.schema[type]!.permissions ?? {})) {
+            expect(
+              engine.lookupResources(user, permission as never, type as never).sort(),
+              `seed ${seed} lookupResources ${type}#${permission}@${user}`,
+            ).toEqual(oracle.lookupResources(type, permission, user));
+          }
+        }
+      }
+    }
+  });
+
   it('the cache never serves stale results across random grants and revokes', () => {
     for (let seed = 1; seed <= SEEDS; seed++) {
       const r = rng(seed * 104729);

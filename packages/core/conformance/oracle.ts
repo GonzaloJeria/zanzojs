@@ -1,5 +1,11 @@
 import { parseExpr, typeOf, type Expr, type NeutralSchema, type NeutralTuple } from './model';
 
+export interface SubjectLookup {
+  subjects: string[];
+  wildcard: boolean;
+  excluded: string[];
+}
+
 /**
  * Reference evaluator with Zanzibar check semantics.
  *
@@ -27,6 +33,34 @@ export class Oracle {
       if (typeOf(t.object) === type) objects.add(t.object);
     }
     return [...objects].filter((o) => this.check(o, permission, subject)).sort();
+  }
+
+  /**
+   * Subjects of `subjectType` that have `permission` on `object`.
+   * - `subjects`: concrete subjects reachable from `object` through any tuple that pass the check;
+   * - `wildcard`: true when any subject of the type passes (granted through `Type:*`);
+   * - `excluded`: when `wildcard`, the reachable subjects that still do not pass.
+   */
+  lookupSubjects(object: string, permission: string, subjectType: string): SubjectLookup {
+    const reachable = new Set<string>();
+    const queue = [object];
+    const seen = new Set(queue);
+    for (let i = 0; i < queue.length; i++) {
+      for (const t of this.tuples) {
+        // Expired tuples relate nothing
+        if (t.object !== queue[i] || (t.expiresAt !== undefined && t.expiresAt <= this.now)) continue;
+        const next = t.subject.includes('#') ? t.subject.slice(0, t.subject.indexOf('#')) : t.subject;
+        if (!t.subject.endsWith(':*') && typeOf(next) === subjectType) reachable.add(next);
+        if (!seen.has(next)) {
+          seen.add(next);
+          queue.push(next);
+        }
+      }
+    }
+    const subjects = [...reachable].filter((s) => this.check(object, permission, s)).sort();
+    const wildcard = this.check(object, permission, `${subjectType}:\u0000nobody`);
+    const excluded = wildcard ? [...reachable].filter((s) => !subjects.includes(s)).sort() : [];
+    return { subjects, wildcard, excluded };
   }
 
   private evalName(object: string, name: string, subject: string, path: Set<string>): boolean {

@@ -97,6 +97,13 @@ const snapshotMs = measureMs(20, (i) => {
   createZanzoSnapshot(engine, `User:${i % 200}`, { entityTypes: ['Document'] });
 }, 3);
 
+const lookupResourcesMs = measureMs(20, (i) => {
+  engine.lookupResources(`User:${i % 200}`, 'read', 'Document');
+}, 3);
+const lookupSubjectsMs = measureMs(2000, (i) => {
+  engine.lookupSubjects(docId(i), 'read', 'User');
+});
+
 // ── Bundle ──
 // Measured minified + gzip: what applications actually ship after their own bundler
 const bundle = transformSync(readFileSync(fileURLToPath(new URL('../dist/index.js', import.meta.url)), 'utf8'), {
@@ -114,6 +121,8 @@ const metrics: Metric[] = [
   { name: 'evaluateAllActions: 4 actions', value: allActionsMs * 1000, unit: 'µs', kind: 'time', better: 'lower' },
   { name: 'listAccessible: Document (50k docs)', value: listMs, unit: 'ms', kind: 'time', better: 'lower' },
   { name: 'snapshot: Document (50k docs)', value: snapshotMs, unit: 'ms', kind: 'time', better: 'lower' },
+  { name: 'lookupResources: Document (50k docs)', value: lookupResourcesMs, unit: 'ms', kind: 'time', better: 'lower' },
+  { name: 'lookupSubjects: User on one document', value: lookupSubjectsMs * 1000, unit: 'µs', kind: 'time', better: 'lower' },
 ];
 
 runGate(fileURLToPath(new URL('./baseline.json', import.meta.url)), metrics);

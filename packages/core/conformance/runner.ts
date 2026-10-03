@@ -1,10 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import { conformanceCases, type ConformanceCase } from './cases/index';
 import type { NeutralSchema, NeutralTuple } from './model';
+import type { SubjectLookup } from './oracle';
 
 export interface Evaluator {
   check(object: string, permission: string, subject: string): boolean | Promise<boolean>;
   lookupResources?(type: string, permission: string, subject: string): string[] | Promise<string[]>;
+  lookupSubjects?(
+    object: string,
+    permission: string,
+    subjectType: string,
+  ): SubjectLookup | Promise<SubjectLookup>;
 }
 
 export interface EvaluatorFactory {
@@ -62,6 +68,16 @@ export async function collectMismatches(evaluator: Evaluator, testCase: Conforma
       const actual = [...(await evaluator.lookupResources(type, permission, subject))].sort();
       if (JSON.stringify(actual) !== JSON.stringify(expected)) {
         mismatches.push(`lookup ${type}#${permission}@${subject}: expected [${expected}], got [${actual}]`);
+      }
+    }
+  }
+  if (evaluator.lookupSubjects) {
+    for (const { object, permission, subjectType, expected } of testCase.subjectLookups ?? []) {
+      const actual = await evaluator.lookupSubjects(object, permission, subjectType);
+      const normalized = { subjects: [...actual.subjects].sort(), wildcard: actual.wildcard, excluded: [...actual.excluded].sort() };
+      const wanted = { subjects: expected.subjects, wildcard: expected.wildcard ?? false, excluded: expected.excluded ?? [] };
+      if (JSON.stringify(normalized) !== JSON.stringify(wanted)) {
+        mismatches.push(`lookupSubjects ${object}#${permission} (${subjectType}): expected ${JSON.stringify(wanted)}, got ${JSON.stringify(normalized)}`);
       }
     }
   }

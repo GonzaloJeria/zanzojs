@@ -147,3 +147,62 @@ describe('SQL query AST from the IR', () => {
     expect(engine.buildDatabaseQuery('User:1', 'delete', 'Document')?.conditions).toHaveLength(1);
   });
 });
+
+describe('Lookups, Expand and Read', () => {
+  const build = () => {
+    const engine = new ZanzoEngine(schema);
+    engine.grant('member').to('User:bob').on('Group:eng');
+    engine.grant('viewer').to('Group:eng#member').on('Folder:root');
+    engine.grant('parent').to('Folder:root').on('Document:rfc');
+    engine.grant('owner').to('User:alice').on('Document:rfc');
+    engine.grant('viewer').to('User:temp').on('Document:rfc').until(new Date(Date.now() - 1000));
+    return engine;
+  };
+
+  it('lookupResources lists what an actor can access', () => {
+    const engine = build();
+    expect(engine.lookupResources('User:bob', 'view', 'Document')).toEqual(['Document:rfc']);
+    expect(engine.lookupResources('User:bob', 'edit', 'Document')).toEqual([]);
+  });
+
+  it('lookupSubjects lists who can access, ignoring expired tuples', () => {
+    const engine = build();
+    expect(engine.lookupSubjects('Document:rfc', 'view', 'User')).toEqual({
+      subjects: ['User:alice', 'User:bob'],
+      wildcard: false,
+      excluded: [],
+    });
+  });
+
+  it('expand returns the rule tree with direct subjects at the leaves', () => {
+    const engine = build();
+    const tree = engine.expand('Document:rfc', 'edit');
+    expect(tree).toEqual({
+      type: 'union',
+      children: [
+        { type: 'leaf', object: 'Document:rfc', relation: 'owner', subjects: ['User:alice'] },
+        { type: 'leaf', object: 'Document:rfc', relation: 'editor', subjects: [] },
+      ],
+    });
+
+    const view = engine.expand('Document:rfc', 'view');
+    expect(view?.type).toBe('exclusion');
+    // The inherited branch walks parent → Folder:root#view, whose viewer is the unexpanded userset
+    expect(JSON.stringify(view)).toContain('"subjects":["Group:eng#member"]');
+  });
+
+  it('read filters stored tuples and reports expirations', () => {
+    const engine = build();
+    expect(engine.read({ object: 'Document:rfc', relation: 'owner' })).toEqual([
+      { subject: 'User:alice', relation: 'owner', object: 'Document:rfc' },
+    ]);
+    expect(engine.read({ subject: 'Group:eng#member' })).toEqual([
+      { subject: 'Group:eng#member', relation: 'viewer', object: 'Folder:root' },
+    ]);
+    const expired = engine.read({ subject: 'User:temp' });
+    expect(expired).toHaveLength(1);
+    expect(expired[0]!.expiresAt).toBeInstanceOf(Date);
+    expect(engine.read()).toHaveLength(5);
+    expect(engine.read({ relation: 'unknown' })).toEqual([]);
+  });
+});

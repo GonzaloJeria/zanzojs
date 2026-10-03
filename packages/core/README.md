@@ -287,6 +287,31 @@ const docs = engine.for('User:alice').listAccessible('Document')
 // → [{ object: 'Document:doc1', actions: ['read', 'write'] }]
 ```
 
+### Lookups, Expand and Read
+
+```typescript
+// Which documents can alice view?
+engine.lookupResources('User:alice', 'view', 'Document');
+// → ['Document:rfc', 'Document:changelog']
+
+// Who can view this document?
+engine.lookupSubjects('Document:rfc', 'view', 'User');
+// → { subjects: ['User:alice', 'User:bob'], wildcard: false, excluded: [] }
+// With a public grant (`User:*`), `wildcard` is true and `excluded` lists related users
+// that are still denied (for example by `viewer - banned`).
+
+// Why? The rule tree with the direct subjects of each relation
+engine.expand('Document:rfc', 'view');
+
+// Stored tuples by object, relation and/or subject
+engine.read({ object: 'Document:rfc' });
+engine.read({ subject: 'Group:eng#member' });
+```
+
+`lookupResources` walks the graph upward from the actor and `lookupSubjects` downward from
+the resource, then check each candidate: the cost depends on the part of the graph that is
+reachable, not on the number of stored tuples.
+
 ### `engine.grant(relation).to(subject).on(object)`
 Adds a tuple to the engine's in-memory index.
 
