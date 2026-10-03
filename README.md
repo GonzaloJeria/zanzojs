@@ -75,12 +75,10 @@ Instead of having `userId` columns everywhere, you funnel all authorization data
 ```typescript
 import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
 
-// 1. The Universal Table
-export const zanzoTuples = sqliteTable('zanzo_tuples', {
-  object: text('object').notNull(),     // e.g. "Workspace:1"
-  relation: text('relation').notNull(), // e.g. "admin"
-  subject: text('subject').notNull(),   // e.g. "User:99"
-});
+// 1. The Universal Table — canonical definition shipped with the adapter
+//    (also available from '@zanzojs/drizzle/pg' and '@zanzojs/drizzle/mysql').
+//    Columns: object ("Workspace:1"), relation ("admin"), subject ("User:99"), expires_at, created_at.
+export { zanzoTuples } from '@zanzojs/drizzle/sqlite';
 
 // 2. Your actual business data (no foreign keys needed for permissions!)
 export const documents = sqliteTable('documents', {
@@ -275,13 +273,16 @@ try {
 }
 ```
 
-### Recommended Database Indexes
-For optimal SQL performance, apply the indexes from [`migrations/recommended-indexes.sql`](./migrations/recommended-indexes.sql):
+### Canonical Migration & Indexes
+`@zanzojs/drizzle` ships the canonical migration for each dialect, including the indexes the adapter relies on:
+
+- `node_modules/@zanzojs/drizzle/migrations/sqlite.sql` (SQLite / Cloudflare D1)
+- `node_modules/@zanzojs/drizzle/migrations/postgres.sql`
+- `node_modules/@zanzojs/drizzle/migrations/mysql.sql`
 
 ```sql
-CREATE UNIQUE INDEX idx_zanzo_unique_tuple ON zanzo_tuples (subject, relation, object);
+CREATE UNIQUE INDEX idx_zanzo_unique ON zanzo_tuples (object, relation, subject);
 CREATE INDEX idx_zanzo_subject_relation ON zanzo_tuples (subject, relation);
-CREATE INDEX idx_zanzo_object_relation ON zanzo_tuples (object, relation);
 ```
 
 ## License

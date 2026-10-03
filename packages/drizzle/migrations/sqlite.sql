@@ -1,4 +1,8 @@
--- Zanzo Universal Tuple Table (same as @zanzojs/drizzle/migrations/sqlite.sql)
+-- ZanzoJS Universal Tuple Table — SQLite / Cloudflare D1
+--   SQLite:        sqlite3 your.db < sqlite.sql
+--   Cloudflare D1: wrangler d1 execute YOUR_DB --file=sqlite.sql
+-- Drizzle definition: import { zanzoTuples } from '@zanzojs/drizzle/sqlite';
+
 CREATE TABLE IF NOT EXISTS zanzo_tuples (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   object     TEXT NOT NULL,
@@ -10,9 +14,3 @@ CREATE TABLE IF NOT EXISTS zanzo_tuples (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_zanzo_unique ON zanzo_tuples (object, relation, subject);
 CREATE INDEX IF NOT EXISTS idx_zanzo_subject_relation ON zanzo_tuples (subject, relation);
-
-CREATE TABLE IF NOT EXISTS documents (
-  id TEXT PRIMARY KEY,
-  title TEXT NOT NULL,
-  workspace_id TEXT NOT NULL
-);

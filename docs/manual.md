@@ -50,21 +50,19 @@ export const engine = new ZanzoEngine(schema);
 ### 3. La Tabla Universal y Base de Datos (Drizzle ORM)
 En tu base de datos (SQLite, PostgreSQL, MySQL), creas **UNA sola tabla** de tuplas. Zanzo es "zero-config", por lo que esta tabla no necesita Foreign Keys, pero **sí necesita** tres índices específicos para que los subqueries (AST) vuelen.
 
-```typescript
-import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
+`@zanzojs/drizzle` incluye la definición canónica de la tabla para cada dialecto:
 
-export const zanzoTuples = sqliteTable('zanzo_tuples', {
-  object: text('object').notNull(),
-  relation: text('relation').notNull(),
-  subject: text('subject').notNull(),
-});
+```typescript
+// SQLite / Cloudflare D1 (también '@zanzojs/drizzle/pg' y '@zanzojs/drizzle/mysql')
+export { zanzoTuples } from '@zanzojs/drizzle/sqlite';
 ```
 
+Columnas: `object`, `relation`, `subject`, `expires_at` (opcional; las tuplas vencidas nunca otorgan acceso en SQL) y `created_at`.
+
 > [!IMPORTANT]
-> **Índices recomendados:**
-> 1. `CREATE UNIQUE INDEX idx_zanzo_unique ON zanzo_tuples (subject, relation, object);`
-> 2. `CREATE INDEX idx_zanzo_sub_rel ON zanzo_tuples (subject, relation);`
-> 3. `CREATE INDEX idx_zanzo_obj_rel ON zanzo_tuples (object, relation);`
+> **Migración canónica:** el paquete publica `migrations/sqlite.sql`, `migrations/postgres.sql` y `migrations/mysql.sql` con la tabla y sus índices:
+> 1. `CREATE UNIQUE INDEX idx_zanzo_unique ON zanzo_tuples (object, relation, subject);`
+> 2. `CREATE INDEX idx_zanzo_subject_relation ON zanzo_tuples (subject, relation);`
 
 ### 4. Escribir y Revocar Permisos (Patrón Transaccional)
 Como Zanzo empuja la evaluación a la base de datos (Query Pushdown), el anidamiento (`workspace.owner` -> `Document.edit`) se debe pre-calcular en tiempo de escritura.
@@ -520,7 +518,7 @@ const reportes = await db.select().from(modules).where(filter);
 
 4. **Verificando SQL Indexes**
    - Ante la duda, ponle `EXPLAIN QUERY PLAN` a tu consulta de Drizzle en Dev.
-   - Asegúrate de ver `SEARCH TABLE zanzo_tuples USING INDEX idx_zanzo_unique`. Si ves `SCAN TABLE zanzo_tuples`, aplicaste mal tus índices o no creaste el compound index sugerido en `migrations/recommended-indexes.sql`.
+   - Asegúrate de ver `SEARCH TABLE zanzo_tuples USING INDEX idx_zanzo_unique`. Si ves `SCAN TABLE zanzo_tuples`, aplicaste mal tus índices o no creaste el compound index de la migración canónica (`@zanzojs/drizzle/migrations/*.sql`).
 
 ---
 

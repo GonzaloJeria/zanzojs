@@ -1,6 +1,9 @@
 /**
  * Template: zanzo-migration.sql
  * Generates the Universal Tuple Table migration for the selected database.
+ *
+ * The statements must stay identical to the canonical migrations shipped in
+ * `@zanzojs/drizzle/migrations/*.sql` (enforced by the drizzle package tests).
  */
 
 export type DatabaseType = 'postgresql' | 'sqlite' | 'mysql';
@@ -22,23 +25,16 @@ function postgresqlMigration(): string {
 -- Run this migration manually: psql -d your_database -f zanzo-migration.sql
 
 CREATE TABLE IF NOT EXISTS zanzo_tuples (
-  id SERIAL PRIMARY KEY,
-  object   TEXT NOT NULL,
-  relation TEXT NOT NULL,
-  subject  TEXT NOT NULL,
+  id         SERIAL PRIMARY KEY,
+  object     TEXT NOT NULL,
+  relation   TEXT NOT NULL,
+  subject    TEXT NOT NULL,
   expires_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Index for loading a user's tuples (most common query)
-CREATE INDEX IF NOT EXISTS idx_zanzo_subject ON zanzo_tuples (subject);
-
--- Index for structural tuple queries
-CREATE INDEX IF NOT EXISTS idx_zanzo_relation ON zanzo_tuples (relation);
-
--- Unique constraint to prevent duplicate tuples
-CREATE UNIQUE INDEX IF NOT EXISTS idx_zanzo_unique 
-  ON zanzo_tuples (object, relation, subject);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_zanzo_unique ON zanzo_tuples (object, relation, subject);
+CREATE INDEX IF NOT EXISTS idx_zanzo_subject_relation ON zanzo_tuples (subject, relation);
 `;
 }
 
@@ -50,18 +46,16 @@ function sqliteMigration(): string {
 --   Cloudflare D1: wrangler d1 execute YOUR_DB --file=zanzo-migration.sql
 
 CREATE TABLE IF NOT EXISTS zanzo_tuples (
-  id       INTEGER PRIMARY KEY AUTOINCREMENT,
-  object   TEXT NOT NULL,
-  relation TEXT NOT NULL,
-  subject  TEXT NOT NULL,
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  object     TEXT NOT NULL,
+  relation   TEXT NOT NULL,
+  subject    TEXT NOT NULL,
   expires_at INTEGER,
   created_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
 
-CREATE INDEX IF NOT EXISTS idx_zanzo_subject  ON zanzo_tuples (subject);
-CREATE INDEX IF NOT EXISTS idx_zanzo_relation ON zanzo_tuples (relation);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_zanzo_unique 
-  ON zanzo_tuples (object, relation, subject);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_zanzo_unique ON zanzo_tuples (object, relation, subject);
+CREATE INDEX IF NOT EXISTS idx_zanzo_subject_relation ON zanzo_tuples (subject, relation);
 `;
 }
 
@@ -79,14 +73,7 @@ CREATE TABLE IF NOT EXISTS zanzo_tuples (
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- Index for loading a user's tuples (most common query)
-CREATE INDEX idx_zanzo_subject ON zanzo_tuples (subject);
-
--- Index for structural tuple queries
-CREATE INDEX idx_zanzo_relation ON zanzo_tuples (relation);
-
--- Unique constraint to prevent duplicate tuples
-CREATE UNIQUE INDEX idx_zanzo_unique 
-  ON zanzo_tuples (object, relation, subject);
+CREATE UNIQUE INDEX idx_zanzo_unique ON zanzo_tuples (object, relation, subject);
+CREATE INDEX idx_zanzo_subject_relation ON zanzo_tuples (subject, relation);
 `;
 }

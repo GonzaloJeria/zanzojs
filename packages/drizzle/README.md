@@ -40,17 +40,40 @@ pnpm add @zanzojs/core@latest @zanzojs/drizzle@latest drizzle-orm
 
 ### 1. Create the Universal Tuple Table
 
-All relationships live in a single table. This is the Zanzibar pattern.
-```typescript
-import { sqliteTable, text, integer } from 'drizzle-orm/sqlite-core';
+All relationships live in a single table. This is the Zanzibar pattern. The package ships the canonical definition for each dialect:
 
-export const zanzoTuples = sqliteTable('zanzo_tuples', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  object: text('object').notNull(),     // e.g. "Document:doc1"
-  relation: text('relation').notNull(), // e.g. "owner"
-  subject: text('subject').notNull(),   // e.g. "User:alice"
-});
+```typescript
+// SQLite / Cloudflare D1
+export { zanzoTuples } from '@zanzojs/drizzle/sqlite';
+// PostgreSQL: '@zanzojs/drizzle/pg' — MySQL: '@zanzojs/drizzle/mysql'
+
+// Custom table name:
+import { createZanzoTuplesTable } from '@zanzojs/drizzle/sqlite';
+export const acl = createZanzoTuplesTable('acl_tuples');
 ```
+
+| Column | Example | Notes |
+|---|---|---|
+| `object` | `Document:doc1` | |
+| `relation` | `owner` | |
+| `subject` | `User:alice` | |
+| `expires_at` | `2026-12-31T00:00:00Z` | Optional. Expired tuples never grant access in SQL queries. |
+| `created_at` | | Set by the database. |
+
+Create it with the matching migration shipped in the package (it includes the required indexes):
+
+```bash
+# Cloudflare D1
+wrangler d1 execute YOUR_DB --file=node_modules/@zanzojs/drizzle/migrations/sqlite.sql
+# PostgreSQL
+psql -d your_database -f node_modules/@zanzojs/drizzle/migrations/postgres.sql
+# MySQL
+mysql -u root -p your_database < node_modules/@zanzojs/drizzle/migrations/mysql.sql
+```
+
+If you use drizzle-kit, re-export the table from your schema file and let it generate the migration instead.
+
+> **Temporal permissions:** when the tuple table has an `expiresAt` column (the canonical one does), the adapter adds `expires_at IS NULL OR expires_at > now` to every check. Custom tables without that column keep working without the filter.
 
 ### 2. Create the adapter
 ```typescript

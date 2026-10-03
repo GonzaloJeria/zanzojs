@@ -24,13 +24,30 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
-    }
+    },
+    "./sqlite": {
+      "types": "./dist/sqlite.d.ts",
+      "import": "./dist/sqlite.js",
+      "require": "./dist/sqlite.cjs"
+    },
+    "./pg": {
+      "types": "./dist/pg.d.ts",
+      "import": "./dist/pg.js",
+      "require": "./dist/pg.cjs"
+    },
+    "./mysql": {
+      "types": "./dist/mysql.d.ts",
+      "import": "./dist/mysql.js",
+      "require": "./dist/mysql.cjs"
+    },
+    "./migrations/*": "./migrations/*"
   },
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": [
     "dist",
+    "migrations",
     "README.md",
     "LICENSE"
   ],
