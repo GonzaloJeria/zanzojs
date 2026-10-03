@@ -1,6 +1,6 @@
 import type { SchemaData } from '../builder/index';
 import type { ZanzoEngine } from '../engine/index';
-import type { AccessibleResult, Tuple, AllSchemaActions, AllSchemaEntities, SchemaEntityRef } from '../types/index';
+import type { AccessibleResult, Tuple, AllSchemaActions, AllSchemaEntities, SchemaEntityRef, EvaluationOptions } from '../types/index';
 import type { CheckResult } from '../engine/trace';
 
 /**
@@ -124,8 +124,8 @@ export class CanBuilder<TSchema extends SchemaData> {
    * Evaluates the permission check against a specific resource.
    * @returns `true` if the actor is authorized, `false` otherwise.
    */
-  on<TResource extends SchemaEntityRef<TSchema> & string>(resource: TResource): boolean {
-    return this.engine.can(this.actor, this.action as any, resource as any);
+  on<TResource extends SchemaEntityRef<TSchema> & string>(resource: TResource, options?: EvaluationOptions): boolean {
+    return this.engine.can(this.actor, this.action as any, resource as any, options);
   }
 }
 
@@ -144,8 +144,8 @@ export class CheckBuilder<TSchema extends SchemaData> {
    * Evaluates the permission check with full trace.
    * @returns `CheckResult` with `allowed` boolean and `trace` array.
    */
-  on<TResource extends SchemaEntityRef<TSchema> & string>(resource: TResource): CheckResult {
-    return this.engine.checkWithTrace(this.actor, this.action, resource);
+  on<TResource extends SchemaEntityRef<TSchema> & string>(resource: TResource, options?: EvaluationOptions): CheckResult {
+    return this.engine.checkWithTrace(this.actor, this.action, resource, options);
   }
 }
 
@@ -206,12 +206,28 @@ export class GrantOnBuilder<TSchema extends SchemaData> {
    * Sets an expiration date on the granted tuple.
    * Uses atomic metadata update — the tuple is never removed from the index.
    */
-  until(date: Date): void {
+  until(date: Date): this {
     // Atomically update the expiration without removing the tuple from the index.
     // This eliminates the race condition where a concurrent can() would see the tuple
     // as missing between removeTuple and addTuple.
     this.engine.updateTupleExpiration(this.tuple, date);
     this.tuple.expiresAt = date;
+    return this;
+  }
+
+  /**
+   * Attaches a condition (caveat) to the granted tuple: it only applies when the condition
+   * registered on the engine returns true for the request context merged with `context`.
+   *
+   * @example
+   * engine.grant('viewer').to('User:bob').on('Document:1').when('ip_allowlist', { allowed: ['10.0.0.7'] });
+   * engine.for('User:bob').can('view').on('Document:1', { context: { ip: '10.0.0.7' } }); // true
+   */
+  when(name: string, context?: Record<string, unknown>): this {
+    const condition = context === undefined ? { name } : { name, context };
+    this.engine.updateTupleCondition(this.tuple, condition);
+    this.tuple.condition = condition;
+    return this;
   }
 }
 

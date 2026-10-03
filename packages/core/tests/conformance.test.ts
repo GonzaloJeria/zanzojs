@@ -8,10 +8,10 @@ import { nativeEngineFactory, nativeCachedEngineFactory, nativeSnapshotFactory }
 // The oracle supports the full model; passing here validates the cases themselves.
 defineConformanceSuite({
   name: 'Oracle (reference semantics)',
-  create: (schema, tuples) => {
-    const oracle = new Oracle(schema, tuples);
+  create: (schema, tuples, testCase) => {
+    const oracle = new Oracle(schema, tuples, Date.now(), testCase.conditions);
     return {
-      check: (object, permission, subject) => oracle.check(object, permission, subject),
+      check: (object, permission, subject, options) => oracle.check(object, permission, subject, options),
       lookupResources: (type, permission, subject) => oracle.lookupResources(type, permission, subject),
       lookupSubjects: (object, permission, subjectType) => oracle.lookupSubjects(object, permission, subjectType),
     };

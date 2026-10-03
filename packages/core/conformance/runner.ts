@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { conformanceCases, type ConformanceCase } from './cases/index';
-import type { NeutralSchema, NeutralTuple } from './model';
+import type { NeutralCheckOptions, NeutralSchema, NeutralTuple } from './model';
 import type { SubjectLookup } from './oracle';
 
 export interface Evaluator {
-  check(object: string, permission: string, subject: string): boolean | Promise<boolean>;
+  check(object: string, permission: string, subject: string, options?: NeutralCheckOptions): boolean | Promise<boolean>;
   lookupResources?(type: string, permission: string, subject: string): string[] | Promise<string[]>;
   lookupSubjects?(
     object: string,
@@ -19,6 +19,7 @@ export interface EvaluatorFactory {
   create(
     schema: NeutralSchema,
     tuples: NeutralTuple[],
+    testCase: ConformanceCase,
   ): Evaluator | { unsupported: string } | Promise<Evaluator | { unsupported: string }>;
 }
 
@@ -39,7 +40,7 @@ export function defineConformanceSuite(factory: EvaluatorFactory, options: Suite
       const knownFailure = options.knownFailures?.[testCase.name];
 
       it(testCase.name, async (ctx) => {
-        const evaluator = await factory.create(testCase.schema, testCase.tuples);
+        const evaluator = await factory.create(testCase.schema, testCase.tuples, testCase);
         if ('unsupported' in evaluator) {
           // Newer vitest versions display the note; older ones accept no argument at runtime
           (ctx.skip as (note?: string) => void)(`unsupported: ${evaluator.unsupported}`);
@@ -59,9 +60,10 @@ export function defineConformanceSuite(factory: EvaluatorFactory, options: Suite
 
 export async function collectMismatches(evaluator: Evaluator, testCase: ConformanceCase): Promise<string[]> {
   const mismatches: string[] = [];
-  for (const [object, permission, subject, expected] of testCase.checks) {
-    const actual = await evaluator.check(object, permission, subject);
-    if (actual !== expected) mismatches.push(`check ${object}#${permission}@${subject}: expected ${expected}, got ${actual}`);
+  for (const [object, permission, subject, expected, options] of testCase.checks) {
+    const actual = await evaluator.check(object, permission, subject, options);
+    const suffix = options ? ` with ${JSON.stringify(options)}` : '';
+    if (actual !== expected) mismatches.push(`check ${object}#${permission}@${subject}${suffix}: expected ${expected}, got ${actual}`);
   }
   if (evaluator.lookupResources) {
     for (const { type, permission, subject, expected } of testCase.lookups ?? []) {

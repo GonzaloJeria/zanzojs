@@ -45,6 +45,8 @@ export const ZanzoErrorCode = {
   EXPANSION_ABORTED: 'ZANZO_EXPANSION_ABORTED',
   /** The schema is malformed: expression syntax, unknown subject types or recursive computed permissions */
   INVALID_SCHEMA: 'ZANZO_INVALID_SCHEMA',
+  /** A tuple references a condition that is not registered on the engine */
+  INVALID_CONDITION: 'ZANZO_INVALID_CONDITION',
   /** The schema uses a feature this evaluator or adapter does not support yet */
   UNSUPPORTED_FEATURE: 'ZANZO_UNSUPPORTED_FEATURE',
 } as const;

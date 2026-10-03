@@ -312,6 +312,40 @@ engine.read({ subject: 'Group:eng#member' });
 the resource, then check each candidate: the cost depends on the part of the graph that is
 reachable, not on the number of stored tuples.
 
+### Conditions (caveats) and contextual tuples
+
+A tuple can carry a condition: it only applies when the predicate registered on the engine
+returns true for the request context merged with the tuple's own context (the tuple's values
+win).
+
+```typescript
+const engine = new ZanzoEngine(schema, {
+  conditions: {
+    ip_allowlist: ({ ip, allowed }) => Array.isArray(allowed) && allowed.includes(ip),
+    business_hours: ({ hour }) => typeof hour === 'number' && hour >= 9 && hour < 18,
+  },
+});
+
+engine.grant('viewer').to('User:bob').on('Document:1').when('ip_allowlist', { allowed: ['10.0.0.7'] });
+
+engine.for('User:bob').can('view').on('Document:1', { context: { ip: '10.0.0.7' } }); // true
+engine.for('User:bob').can('view').on('Document:1', { context: { ip: '1.2.3.4' } });  // false
+```
+
+Contextual tuples hold for one request only: they are never stored or cached and do not
+change `engine.revision`. They apply in addition to stored tuples.
+
+```typescript
+engine.for('User:guest').can('view').on('Document:1', {
+  contextualTuples: [{ subject: 'User:guest', relation: 'viewer', object: 'Folder:shared' }],
+});
+```
+
+Both options are accepted by `can`, `check`, `lookupResources` and `lookupSubjects`. Checks
+with a request context or contextual tuples bypass the cache. Conditions should be pure
+functions of their context; checks without context may be cached. Tuples loaded with
+`engine.load()` keep their `condition` (`{ name, context }`), and `engine.read()` returns it.
+
 ### `engine.grant(relation).to(subject).on(object)`
 Adds a tuple to the engine's in-memory index.
 

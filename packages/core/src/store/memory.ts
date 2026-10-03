@@ -100,6 +100,8 @@ export class MemoryTupleStore {
 
   /** Expiration in epoch milliseconds, only for edges that expire */
   readonly expiry = new Map<number, number>();
+  /** Caveats, only for conditional edges */
+  readonly conditions = new Map<number, { name: string; context?: Record<string, unknown> }>();
   /** Hash overlay for objects with many edges: object → relation → LargeRelation */
   private readonly large = new Map<number, Map<number, LargeRelation>>();
 
@@ -259,6 +261,7 @@ export class MemoryTupleStore {
     if (large && count <= LARGE_OBJECT / 2) this.large.delete(object);
 
     this.expiry.delete(e);
+    this.conditions.delete(e);
     this.edgeObject[e] = NONE;
     this.forwardNext[e] = this.freeEdge;
     this.freeEdge = e;
@@ -297,6 +300,20 @@ export class MemoryTupleStore {
     this.reversePrev = this.reversePrev.slice(0, edges);
   }
 
+  /** Sets or clears the caveat of an edge. */
+  setCondition(e: number, condition: { name: string; context?: Record<string, unknown> } | undefined): void {
+    const current = this.conditions.get(e);
+    if (condition === undefined) {
+      if (current !== undefined) {
+        this.conditions.delete(e);
+        this.revision++;
+      }
+    } else if (current?.name !== condition.name || current.context !== condition.context) {
+      this.conditions.set(e, condition);
+      this.revision++;
+    }
+  }
+
   /** Calls `fn` for every live edge. */
   forEachEdge(fn: (edge: number) => void): void {
     for (let e = 0; e < this.edgeHighWater; e++) {
@@ -325,6 +342,7 @@ export class MemoryTupleStore {
     this.freeEdge = NONE;
     this.liveEdges = 0;
     this.expiry.clear();
+    this.conditions.clear();
     this.large.clear();
     this.revision++;
   }

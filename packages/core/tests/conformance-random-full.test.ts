@@ -3,7 +3,8 @@ import { Oracle } from '../conformance/oracle';
 import { randomFullWorld, rng } from '../conformance/random';
 import { createNativeEngine } from '../conformance/native-engine';
 import { createZanzoSnapshot } from '../src/compiler/index';
-import type { NeutralTuple } from '../conformance/model';
+import type { NeutralCheckOptions, NeutralTuple } from '../conformance/model';
+import { toOptions } from '../conformance/convert';
 
 const SEEDS = 300;
 const now = Date.now();
@@ -85,6 +86,50 @@ describe('randomized conformance on the full model (usersets, wildcards, &, -, r
             ).toEqual(oracle.lookupResources(type, permission, user));
           }
         }
+      }
+    }
+  });
+
+  it('conditions and contextual tuples agree with the oracle and never leak', () => {
+    // A tuple applies when its key matches the request's `open` value; the tuple's own context wins
+    const conditions = { gate: (context: Record<string, unknown>) => context['key'] === context['open'] };
+
+    for (let seed = 1; seed <= SEEDS; seed++) {
+      const r = rng(seed * 7);
+      const world = randomFullWorld(r, now);
+      const tuples = world.tuples.map((t) => {
+        if (!r.chance(0.3)) return t;
+        const condition = r.chance(0.5) ? { name: 'gate', context: { key: r.int(3) } } : { name: 'gate' };
+        return { ...t, condition };
+      });
+
+      const engine = createNativeEngine(world.schema, tuples, conditions);
+      engine.enableCache({ ttlMs: 60_000 });
+      const oracle = new Oracle(world.schema, tuples, now, conditions);
+      const revision = engine.revision;
+
+      for (let i = 0; i < 40; i++) {
+        const [object, permission] = r.pick(world.targets);
+        const user = r.pick(world.users);
+        const options: NeutralCheckOptions = {};
+        if (r.chance(0.7)) options.context = { open: r.int(3), key: r.int(3) };
+        if (r.chance(0.4)) {
+          options.contextualTuples = Array.from({ length: 1 + r.int(3) }, () => {
+            const [o, relation, candidates] = r.pick(world.writable);
+            return { object: o, relation, subject: candidates.length > 0 ? r.pick(candidates) : user };
+          });
+        }
+
+        const expected = oracle.check(object, permission, user, options);
+        const actual = engine.can(user, permission as never, object as never, toOptions(options));
+        if (actual !== expected) {
+          expect.fail(`seed ${seed}: ${object}#${permission}@${user} with ${JSON.stringify(options)} expected ${expected}, got ${actual}`);
+        }
+
+        // Nothing leaks into later checks: stored tuples, revision and cache are untouched
+        const plain = engine.can(user, permission as never, object as never);
+        expect(plain, `seed ${seed}: leak after ${JSON.stringify(options)}`).toBe(oracle.check(object, permission, user));
+        expect(engine.revision).toBe(revision);
       }
     }
   });

@@ -22,13 +22,13 @@ Current status:
 
 | Evaluator | Passing | Not expressible | Known failures |
 |---|---|---|---|
-| Oracle | 17 / 17 | 0 | 0 |
-| `ZanzoEngine`, expression syntax (with and without cache) | 17 / 17 | 0 | 0 |
-| Snapshot + `ZanzoClient`, expression syntax | 17 / 17 | 0 | 0 |
-| `ZanzoEngine`, legacy array syntax | 8 | 9 | 0 |
-| Drizzle adapter + `materializeDerivedTuples` | 5 | 9 | 3 |
+| Oracle | 20 / 20 | 0 | 0 |
+| `ZanzoEngine`, expression syntax (with and without cache) | 20 / 20 | 0 | 0 |
+| Snapshot + `ZanzoClient`, expression syntax | 17 | 3 (request context) | 0 |
+| `ZanzoEngine`, legacy array syntax | 11 | 9 | 0 |
+| Drizzle adapter + `materializeDerivedTuples` | 5 | 12 | 3 |
 
 Randomized suites: `conformance-random.test.ts` (legacy subset, 200 worlds) and
 `conformance-random-full.test.ts` (full model, 300 worlds) compare checks, `listAccessible`,
-snapshots, `lookupResources`, `lookupSubjects` and the cache under random grants and revokes
-against the oracle.
+snapshots, `lookupResources`, `lookupSubjects`, conditions, contextual tuples and the cache
+under random grants and revokes against the oracle.

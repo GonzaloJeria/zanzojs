@@ -1,5 +1,5 @@
 import type { SchemaData } from '../builder/index';
-import type { Tuple, AllSchemaRelations, SchemaEntityRef } from '../types/index';
+import type { Tuple, AllSchemaRelations, SchemaEntityRef, ConditionFunction, EvaluationOptions, TupleCondition } from '../types/index';
 import { RELATION_PATH_SEPARATOR, FIELD_SEPARATOR } from '../ref/index';
 import { ForBuilder, GrantBuilder, RevokeBuilder } from '../fluent/index';
 import { ZanzoError, ZanzoErrorCode } from '../errors';
@@ -43,6 +43,8 @@ interface EvalContext {
   /** Incremented whenever a cycle is cut; false results computed during a cycle are not memoized */
   cycleHits: number;
   trace?: TraceStep[];
+  /** Request context for tuple conditions */
+  context: Record<string, unknown> | undefined;
 }
 
 /**
@@ -77,6 +79,22 @@ export type ExpandTree =
   | { type: 'exclusion'; base: ExpandTree; subtract: ExpandTree }
   /** A permission reached again while expanding itself */
   | { type: 'cycle'; object: string; permission: string };
+
+/** Options for `new ZanzoEngine(schema, options)`. */
+export interface EngineOptions {
+  /**
+   * Caveat predicates by name. Tuples reference them with `condition: { name, context }`
+   * and only apply when the predicate returns true.
+   *
+   * @example
+   * new ZanzoEngine(schema, {
+   *   conditions: {
+   *     ip_allowlist: ({ ip, allowed }) => (allowed as string[]).includes(ip as string),
+   *   },
+   * })
+   */
+  conditions?: Record<string, ConditionFunction>;
+}
 
 /** Filter for `engine.read()`. Omitted fields match anything. */
 export interface TupleFilter {
@@ -132,6 +150,11 @@ export class ZanzoEngine<TSchema extends SchemaData> {
   private compiled: CompiledSchema;
   // Compiled schema indexed by interned type id
   private plans: (TypePlan | undefined)[] = [];
+  // Caveat predicates by name
+  private conditions: Record<string, ConditionFunction>;
+  // During a request with contextual tuples identical to stored ones: each contextual
+  // expiration/condition, which apply in addition to the stored edge's own
+  private contextualOverlay = new Map<number, { expiresAt: number | undefined; condition: TupleCondition | undefined }[]>();
   // Earliest future expiration among stored tuples. Once `Date.now()` crosses it,
   // cached results may be stale, so the cache is cleared once and the boundary recomputed.
   private nextExpiry = Number.POSITIVE_INFINITY;
@@ -139,8 +162,9 @@ export class ZanzoEngine<TSchema extends SchemaData> {
   /**
    * @throws {ZanzoError} MISSING_RELATION or INVALID_SCHEMA when the schema is invalid.
    */
-  constructor(schema: Readonly<TSchema>) {
+  constructor(schema: Readonly<TSchema>, options: EngineOptions = {}) {
     this.schema = schema;
+    this.conditions = options.conditions ?? {};
     this.compiled = compileSchema(schema);
 
     const names = this.store.names;
@@ -431,12 +455,16 @@ export class ZanzoEngine<TSchema extends SchemaData> {
       this.validateInput(tuple.relation, 'relation');
     }
 
+    const condition = 'condition' in tuple ? tuple.condition : undefined;
+    if (condition !== undefined) this.validateCondition(condition);
+
     const { edge } = store.add(store.intern(tuple.object), store.internName(tuple.relation), store.intern(tuple.subject));
 
-    // Re-adding a tuple replaces its expiration (or removes it)
+    // Re-adding a tuple replaces its expiration and condition (or removes them)
     const expiresAt = 'expiresAt' in tuple && tuple.expiresAt ? tuple.expiresAt.getTime() : undefined;
     store.setExpiry(edge, expiresAt);
     if (expiresAt !== undefined) this.trackExpiry(expiresAt);
+    store.setCondition(edge, condition);
 
     // Invalidate cache on any tuple mutation unless skipped for bulk processing
     if (!skipCacheInvalidation) {
@@ -550,6 +578,68 @@ export class ZanzoEngine<TSchema extends SchemaData> {
   }
 
   /**
+   * Sets the condition of an existing tuple in place, or adds the tuple with it.
+   * @internal Used by GrantOnBuilder.when()
+   */
+  public updateTupleCondition(tuple: RelationTuple | Tuple, condition: TupleCondition): void {
+    this.validateCondition(condition);
+    const edge = this.findEdge(tuple);
+    if (edge !== NONE) {
+      this.store.setCondition(edge, condition);
+      this.invalidateCacheFor(tuple.object);
+    } else {
+      this.addTuple({ ...tuple, condition });
+    }
+  }
+
+  private validateCondition(condition: TupleCondition): void {
+    if (!condition || typeof condition.name !== 'string' || !Object.prototype.hasOwnProperty.call(this.conditions, condition.name)) {
+      throw new ZanzoError(
+        ZanzoErrorCode.INVALID_CONDITION,
+        `[Zanzo] Unknown condition "${condition?.name}". Register it with new ZanzoEngine(schema, { conditions: { ${condition?.name}: (context) => boolean } }).`,
+      );
+    }
+  }
+
+  /**
+   * Applies request-only tuples around `fn`: they are visible to the evaluation and removed
+   * afterwards, leaving the stored tuples, the cache and `revision` untouched.
+   */
+  private withContextualTuples<T>(tuples: Tuple[] | undefined, fn: () => T): T {
+    if (!tuples || tuples.length === 0) return fn();
+    const store = this.store;
+    const revision = store.revision;
+    const created: number[] = [];
+    try {
+      for (const tuple of tuples) {
+        this.validateRef(tuple.subject, 'subject');
+        this.validateRef(tuple.object, 'object');
+        if (store.names.get(tuple.relation) === undefined) this.validateInput(tuple.relation, 'relation');
+        if (tuple.condition !== undefined) this.validateCondition(tuple.condition);
+
+        const { edge, created: isNew } = store.add(store.intern(tuple.object), store.internName(tuple.relation), store.intern(tuple.subject));
+        const expiresAt = tuple.expiresAt?.getTime();
+        if (isNew) {
+          created.push(edge);
+          if (expiresAt !== undefined) store.setExpiry(edge, expiresAt);
+          if (tuple.condition) store.setCondition(edge, tuple.condition);
+        } else {
+          // Same tuple as a stored one: it applies in addition to the stored edge's own
+          // expiration and condition (and to any other contextual copy)
+          const alternatives = this.contextualOverlay.get(edge) ?? [];
+          alternatives.push({ expiresAt, condition: tuple.condition });
+          this.contextualOverlay.set(edge, alternatives);
+        }
+      }
+      return fn();
+    } finally {
+      this.contextualOverlay.clear();
+      for (let i = created.length - 1; i >= 0; i--) store.removeEdge(created[i]!);
+      store.revision = revision;
+    }
+  }
+
+  /**
    * Clears all relation tuples in the memory store.
    */
   public clearTuples(): void {
@@ -592,6 +682,35 @@ export class ZanzoEngine<TSchema extends SchemaData> {
     if (expiry.size === 0) return false;
     const expiresAt = expiry.get(edge);
     return expiresAt !== undefined && expiresAt <= now;
+  }
+
+  /** Whether an edge applies to this evaluation: not expired and its condition, if any, holds. */
+  private isActive(edge: number, now: number, context: Record<string, unknown> | undefined): boolean {
+    // Common case: no expirations, conditions or contextual copies anywhere
+    const store = this.store;
+    if (store.expiry.size === 0 && store.conditions.size === 0 && this.contextualOverlay.size === 0) return true;
+    if (this.storedEdgeActive(edge, now, context)) return true;
+    if (this.contextualOverlay.size === 0) return false;
+    const alternatives = this.contextualOverlay.get(edge);
+    if (alternatives === undefined) return false;
+    for (const { expiresAt, condition } of alternatives) {
+      if (expiresAt !== undefined && expiresAt <= now) continue;
+      if (condition === undefined || this.conditionHolds(condition, context)) return true;
+    }
+    return false;
+  }
+
+  private storedEdgeActive(edge: number, now: number, context: Record<string, unknown> | undefined): boolean {
+    if (this.isExpired(edge, now)) return false;
+    const conditions = this.store.conditions;
+    if (conditions.size === 0) return true;
+    const condition = conditions.get(edge);
+    return condition === undefined || this.conditionHolds(condition, context);
+  }
+
+  /** Values stored on the tuple take precedence over the request's. */
+  private conditionHolds(condition: TupleCondition, context: Record<string, unknown> | undefined): boolean {
+    return this.conditions[condition.name]!({ ...context, ...condition.context });
   }
 
   private trackExpiry(expiresAt: number): void {
@@ -670,27 +789,37 @@ export class ZanzoEngine<TSchema extends SchemaData> {
   public can<
     TResourceName extends Extract<ExtractSchemaResources<TSchema>, string>,
     TAction extends ExtractSchemaActions<TSchema, TResourceName>,
-  >(actor: string, action: TAction, resource: `${TResourceName}:${string}`): boolean {
+  >(actor: string, action: TAction, resource: `${TResourceName}:${string}`, options?: EvaluationOptions): boolean {
     this.validateRef(actor, 'actor');
     this.validateRef(resource, 'resource');
+    if (options && (options.context !== undefined || options.contextualTuples?.length)) {
+      // Request-specific results are never read from or written to the cache
+      return this.withContextualTuples(options.contextualTuples, () =>
+        this.check(actor, action as string, resource, options.context, false),
+      );
+    }
+    return this.check(actor, action as string, resource, undefined, true);
+  }
 
+  private check(actor: string, action: string, resource: string, context: Record<string, unknown> | undefined, useCache: boolean): boolean {
     const plan = this.planFor(resource);
-    if (!plan || !plan.type.actionSet.has(action as string)) return false;
-    const node = plan.type.permissions.get(action as string);
+    if (!plan || !plan.type.actionSet.has(action)) return false;
+    const node = plan.type.permissions.get(action);
     if (!node) return false;
 
     const now = Date.now();
     this.syncCacheWithExpirations(now);
 
-    if (this.cache) {
-      const cached = this.cache.get(actor, action as string, resource);
+    const cache = useCache ? this.cache : null;
+    if (cache) {
+      const cached = cache.get(actor, action, resource);
       if (cached !== undefined) return cached;
     }
 
     // An object that appears in no tuple has no relations, so nothing can grant access
     const object = this.store.entities.get(resource);
-    const result = object !== undefined && this.evalNode(object, node, this.createContext(actor, now));
-    this.cache?.set(actor, action as string, resource, result);
+    const result = object !== undefined && this.evalNode(object, node, this.createContext(actor, now, context));
+    cache?.set(actor, action, resource, result);
     return result;
   }
 
@@ -702,19 +831,21 @@ export class ZanzoEngine<TSchema extends SchemaData> {
    * const { allowed, trace } = engine.for('User:alice').check('write').on('Document:doc1');
    * ```
    */
-  public checkWithTrace(actor: string, action: string, resource: string): CheckResult {
+  public checkWithTrace(actor: string, action: string, resource: string, options?: EvaluationOptions): CheckResult {
     this.validateRef(actor, 'actor');
     this.validateRef(resource, 'resource');
 
-    const trace: TraceStep[] = [];
-    const plan = this.planFor(resource);
-    const node = plan?.type.actionSet.has(action) ? plan.type.permissions.get(action) : undefined;
-    const object = this.store.entities.get(resource);
-    if (!node || object === undefined) return { allowed: false, trace };
+    return this.withContextualTuples(options?.contextualTuples, () => {
+      const trace: TraceStep[] = [];
+      const plan = this.planFor(resource);
+      const node = plan?.type.actionSet.has(action) ? plan.type.permissions.get(action) : undefined;
+      const object = this.store.entities.get(resource);
+      if (!node || object === undefined) return { allowed: false, trace };
 
-    const ctx = this.createContext(actor, Date.now());
-    ctx.trace = trace;
-    return { allowed: this.evalNode(object, node, ctx), trace };
+      const ctx = this.createContext(actor, Date.now(), options?.context);
+      ctx.trace = trace;
+      return { allowed: this.evalNode(object, node, ctx), trace };
+    });
   }
 
   // ─── Lookups, Expand and Read ─────────────────────────────────────
@@ -733,14 +864,18 @@ export class ZanzoEngine<TSchema extends SchemaData> {
     actor: string,
     action: ExtractSchemaActions<TSchema, TResourceName> & string,
     resourceType: TResourceName,
+    options?: EvaluationOptions,
   ): string[] {
     this.validateRef(actor, 'actor');
-    const prefix = `${resourceType}:`;
-    const resources: string[] = [];
-    for (const object of this.getCandidateObjects(actor)) {
-      if (object.startsWith(prefix) && this.can(actor, action as never, object as never)) resources.push(object);
-    }
-    return resources;
+    const useCache = options?.context === undefined && !options?.contextualTuples?.length;
+    return this.withContextualTuples(options?.contextualTuples, () => {
+      const prefix = `${resourceType}:`;
+      const resources: string[] = [];
+      for (const object of this.getCandidateObjects(actor)) {
+        if (object.startsWith(prefix) && this.check(actor, action, object, options?.context, useCache)) resources.push(object);
+      }
+      return resources;
+    });
   }
 
   /**
@@ -760,8 +895,20 @@ export class ZanzoEngine<TSchema extends SchemaData> {
     resource: `${TResourceName}:${string}`,
     action: ExtractSchemaActions<TSchema, TResourceName> & string,
     subjectType: Extract<ExtractSchemaResources<TSchema>, string>,
+    options?: EvaluationOptions,
   ): LookupSubjectsResult {
     this.validateRef(resource, 'resource');
+    return this.withContextualTuples(options?.contextualTuples, () =>
+      this.lookupSubjectsNow(resource, action, subjectType, options?.context),
+    );
+  }
+
+  private lookupSubjectsNow(
+    resource: string,
+    action: string,
+    subjectType: string,
+    context: Record<string, unknown> | undefined,
+  ): LookupSubjectsResult {
     const result: LookupSubjectsResult = { subjects: [], wildcard: false, excluded: [] };
 
     const plan = this.planFor(resource);
@@ -780,8 +927,8 @@ export class ZanzoEngine<TSchema extends SchemaData> {
     for (let cursor = 0; cursor < queue.length; cursor++) {
       for (let e = store.forwardHead[queue[cursor]!]!; e !== NONE; e = store.forwardNext[e]!) {
         const subject = store.edgeSubject[e]!;
-        // Wildcards relate no concrete subject; expired tuples relate nothing
-        if (store.kind[subject] === KIND_WILDCARD || this.isExpired(e, now)) continue;
+        // Wildcards relate no concrete subject; inactive tuples relate nothing
+        if (store.kind[subject] === KIND_WILDCARD || !this.isActive(e, now, context)) continue;
         const next = store.reverseKey(subject);
         if (seen.has(next)) continue;
         seen.add(next);
@@ -791,7 +938,7 @@ export class ZanzoEngine<TSchema extends SchemaData> {
     }
 
     const evaluate = (actor: number) =>
-      this.evalNode(object, node, { actor, actorType: typeId ?? NONE, now, depth: 0, cycleHits: 0 });
+      this.evalNode(object, node, { actor, actorType: typeId ?? NONE, now, depth: 0, cycleHits: 0, context });
 
     for (const candidate of candidates) {
       if (evaluate(candidate)) result.subjects.push(store.entities.values[candidate]!);
@@ -896,6 +1043,8 @@ export class ZanzoEngine<TSchema extends SchemaData> {
       };
       const expiresAt = store.expiry.get(e);
       if (expiresAt !== undefined) tuple.expiresAt = new Date(expiresAt);
+      const condition = store.conditions.get(e);
+      if (condition !== undefined) tuple.condition = condition;
       return tuple;
     };
 
@@ -936,8 +1085,9 @@ export class ZanzoEngine<TSchema extends SchemaData> {
     return typeId === undefined ? undefined : this.plans[typeId];
   }
 
-  private createContext(actor: string, now: number): EvalContext {
+  private createContext(actor: string, now: number, context?: Record<string, unknown>): EvalContext {
     return {
+      context,
       actor: this.store.entities.get(actor) ?? NONE,
       actorType: this.store.types.get(typeOf(actor)) ?? NONE,
       now,
@@ -964,7 +1114,7 @@ export class ZanzoEngine<TSchema extends SchemaData> {
           if (store.edgeRelation[e] !== relation) continue;
           const subject = store.edgeSubject[e]!;
           // tuple_to_userset follows concrete objects only
-          if (store.kind[subject] !== KIND_OBJECT || this.isExpired(e, ctx.now)) continue;
+          if (store.kind[subject] !== KIND_OBJECT || !this.isActive(e, ctx.now, ctx.context)) continue;
           if (this.descend(subject, node.then, ctx)) {
             found = true;
             break;
@@ -1018,7 +1168,7 @@ export class ZanzoEngine<TSchema extends SchemaData> {
     const store = this.store;
     if (ctx.actor !== NONE) {
       const edge = store.find(object, relation, ctx.actor);
-      if (edge !== NONE && !this.isExpired(edge, ctx.now)) return true;
+      if (edge !== NONE && this.isActive(edge, ctx.now, ctx.context)) return true;
     }
 
     const large = store.largeIndirect(object, relation);
@@ -1051,7 +1201,7 @@ export class ZanzoEngine<TSchema extends SchemaData> {
 
   /** Whether a wildcard or userset edge grants the actor. */
   private matchesIndirect(edge: number, ctx: EvalContext): boolean {
-    if (this.isExpired(edge, ctx.now)) return false;
+    if (!this.isActive(edge, ctx.now, ctx.context)) return false;
     const store = this.store;
     const subject = store.edgeSubject[edge]!;
     if (store.kind[subject] === KIND_WILDCARD) return store.entityType[subject] === ctx.actorType;

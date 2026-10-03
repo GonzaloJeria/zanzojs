@@ -33,6 +33,16 @@ export interface NeutralTuple {
   subject: string;
   /** Unix epoch milliseconds. Expired tuples never grant anything. */
   expiresAt?: number;
+  /** Caveat: the tuple applies only when the named condition holds */
+  condition?: { name: string; context?: Record<string, unknown> };
+}
+
+export type NeutralCondition = (context: Record<string, unknown>) => boolean;
+
+/** Per-check options: request context and request-only tuples */
+export interface NeutralCheckOptions {
+  context?: Record<string, unknown>;
+  contextualTuples?: NeutralTuple[];
 }
 
 export type Expr =

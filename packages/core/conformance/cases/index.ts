@@ -1,4 +1,4 @@
-import type { NeutralSchema, NeutralTuple } from '../model';
+import type { NeutralCheckOptions, NeutralCondition, NeutralSchema, NeutralTuple } from '../model';
 
 export type Feature =
   | 'direct'
@@ -13,10 +13,18 @@ export type Feature =
   | 'userset-subjects'
   | 'wildcard'
   | 'intersection'
-  | 'exclusion';
+  | 'exclusion'
+  | 'conditions'
+  | 'contextual-tuples';
 
-/** [object, permission, subject, expected] */
-export type CheckAssertion = [object: string, permission: string, subject: string, expected: boolean];
+/** [object, permission, subject, expected, options?] */
+export type CheckAssertion = [
+  object: string,
+  permission: string,
+  subject: string,
+  expected: boolean,
+  options?: NeutralCheckOptions,
+];
 
 export interface LookupAssertion {
   type: string;
@@ -41,6 +49,8 @@ export interface ConformanceCase {
   checks: CheckAssertion[];
   lookups?: LookupAssertion[];
   subjectLookups?: SubjectLookupAssertion[];
+  /** Caveat predicates referenced by tuple conditions */
+  conditions?: Record<string, NeutralCondition>;
 }
 
 const HOUR = 3_600_000;
@@ -433,6 +443,63 @@ export const conformanceCases: ConformanceCase[] = [
     lookups: [{ type: 'Document', permission: 'view', subject: 'User:anyone', expected: ['Document:1'] }],
     subjectLookups: [
       { object: 'Document:1', permission: 'view', subjectType: 'User', expected: { subjects: [], wildcard: true, excluded: ['User:mallory'] } },
+    ],
+  },
+  {
+    name: 'conditional tuples apply only when their condition holds',
+    features: ['conditions', 'tuple-to-userset'],
+    schema: {
+      User: {},
+      Folder: { relations: { viewer: ['User'] }, permissions: { view: 'viewer' } },
+      Document: { relations: { parent: ['Folder'], viewer: ['User'] }, permissions: { view: 'viewer | parent->view' } },
+    },
+    conditions: {
+      ip_allowlist: (context) => Array.isArray(context['allowed']) && context['allowed'].includes(context['ip']),
+    },
+    tuples: [
+      { object: 'Document:1', relation: 'viewer', subject: 'User:bob', condition: { name: 'ip_allowlist', context: { allowed: ['10.0.0.7'] } } },
+      { object: 'Folder:f', relation: 'viewer', subject: 'User:fiona' },
+      { object: 'Document:1', relation: 'parent', subject: 'Folder:f', condition: { name: 'ip_allowlist', context: { allowed: ['10.0.0.9'] } } },
+    ],
+    checks: [
+      ['Document:1', 'view', 'User:bob', true, { context: { ip: '10.0.0.7' } }],
+      ['Document:1', 'view', 'User:bob', false, { context: { ip: '192.168.1.1' } }],
+      ['Document:1', 'view', 'User:bob', false],
+      ['Document:1', 'view', 'User:fiona', true, { context: { ip: '10.0.0.9' } }],
+      ['Document:1', 'view', 'User:fiona', false, { context: { ip: '10.0.0.7' } }],
+    ],
+  },
+  {
+    name: 'tuple context takes precedence over request context',
+    features: ['conditions'],
+    schema: {
+      User: {},
+      Report: { relations: { reader: ['User'] }, permissions: { read: 'reader' } },
+    },
+    conditions: { gold_tier: (context) => context['tier'] === 'gold' },
+    tuples: [
+      { object: 'Report:q3', relation: 'reader', subject: 'User:ana', condition: { name: 'gold_tier', context: { tier: 'gold' } } },
+      { object: 'Report:q3', relation: 'reader', subject: 'User:ben', condition: { name: 'gold_tier' } },
+    ],
+    checks: [
+      ['Report:q3', 'read', 'User:ana', true, { context: { tier: 'free' } }],
+      ['Report:q3', 'read', 'User:ben', false, { context: { tier: 'free' } }],
+      ['Report:q3', 'read', 'User:ben', true, { context: { tier: 'gold' } }],
+    ],
+  },
+  {
+    name: 'contextual tuples apply to one check only',
+    features: ['contextual-tuples', 'tuple-to-userset'],
+    schema: {
+      User: {},
+      Network: { relations: { member: ['User'] } },
+      Document: { relations: { network: ['Network'] }, permissions: { view: 'network->member' } },
+    },
+    tuples: [{ object: 'Document:1', relation: 'network', subject: 'Network:office' }],
+    checks: [
+      ['Document:1', 'view', 'User:carol', true, { contextualTuples: [{ object: 'Network:office', relation: 'member', subject: 'User:carol' }] }],
+      ['Document:1', 'view', 'User:carol', false],
+      ['Document:1', 'view', 'User:dan', false, { contextualTuples: [{ object: 'Network:office', relation: 'member', subject: 'User:carol' }] }],
     ],
   },
 ];

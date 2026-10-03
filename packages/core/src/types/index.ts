@@ -35,6 +35,35 @@ export interface Tuple {
   object: string;
   /** ABAC basic — if set and past, the tuple is ignored during evaluation. */
   expiresAt?: Date;
+  /**
+   * Caveat: the tuple only applies when the named condition (registered on the engine)
+   * returns true for the request context merged with `context`.
+   */
+  condition?: TupleCondition;
+}
+
+/** A condition attached to a tuple. `context` values take precedence over the request's. */
+export interface TupleCondition {
+  name: string;
+  context?: Record<string, unknown>;
+}
+
+/**
+ * A caveat predicate, registered with `new ZanzoEngine(schema, { conditions })`.
+ * It receives the request context merged with the tuple's context and must be a pure
+ * function of it: results may be cached when no request context is given.
+ */
+export type ConditionFunction = (context: Record<string, unknown>) => boolean;
+
+/** Per-request options for checks and lookups. */
+export interface EvaluationOptions {
+  /** Values available to tuple conditions (for example `{ ip: '10.0.0.7' }`). */
+  context?: Record<string, unknown>;
+  /**
+   * Tuples that hold for this request only. They are never stored, never cached and do
+   * not change `engine.revision`.
+   */
+  contextualTuples?: Tuple[];
 }
 
 /**

@@ -206,3 +206,80 @@ describe('Lookups, Expand and Read', () => {
     expect(engine.read({ relation: 'unknown' })).toEqual([]);
   });
 });
+
+describe('Conditions and contextual tuples', () => {
+  const conditions = {
+    ip_allowlist: (context: Record<string, unknown>) =>
+      Array.isArray(context['allowed']) && context['allowed'].includes(context['ip']),
+    business_hours: (context: Record<string, unknown>) => {
+      const hour = context['hour'];
+      return typeof hour === 'number' && hour >= 9 && hour < 18;
+    },
+  };
+
+  it('grants through a conditional tuple only when the condition holds', () => {
+    const engine = new ZanzoEngine(schema, { conditions });
+    engine.enableCache({ ttlMs: 60_000 });
+    engine.grant('viewer').to('User:bob').on('Document:1').when('ip_allowlist', { allowed: ['10.0.0.7'] });
+
+    expect(engine.for('User:bob').can('view').on('Document:1', { context: { ip: '10.0.0.7' } })).toBe(true);
+    expect(engine.for('User:bob').can('view').on('Document:1', { context: { ip: '1.2.3.4' } })).toBe(false);
+    // Without context the condition sees no ip: denied, and this result may be cached
+    expect(engine.for('User:bob').can('view').on('Document:1')).toBe(false);
+    // A later request with the right context is not served the cached denial
+    expect(engine.for('User:bob').can('view').on('Document:1', { context: { ip: '10.0.0.7' } })).toBe(true);
+  });
+
+  it('round-trips conditions through read() and load()', () => {
+    const engine = new ZanzoEngine(schema, { conditions });
+    engine.grant('viewer').to('User:bob').on('Document:1').when('business_hours');
+    const [stored] = engine.read({ object: 'Document:1' });
+    expect(stored).toEqual({ subject: 'User:bob', relation: 'viewer', object: 'Document:1', condition: { name: 'business_hours' } });
+
+    const copy = new ZanzoEngine(schema, { conditions });
+    copy.load([stored!]);
+    expect(copy.for('User:bob').can('view').on('Document:1', { context: { hour: 10 } })).toBe(true);
+    expect(copy.for('User:bob').can('view').on('Document:1', { context: { hour: 22 } })).toBe(false);
+  });
+
+  it('rejects tuples with unregistered conditions', () => {
+    const engine = new ZanzoEngine(schema, { conditions });
+    expect(() => engine.grant('viewer').to('User:bob').on('Document:1').when('unknown')).toThrow(
+      expect.objectContaining({ code: ZanzoErrorCode.INVALID_CONDITION }),
+    );
+  });
+
+  it('applies contextual tuples to one request without storing or caching them', () => {
+    const engine = new ZanzoEngine(schema, { conditions });
+    engine.enableCache({ ttlMs: 60_000 });
+    engine.grant('parent').to('Folder:shared').on('Document:1');
+    const revision = engine.revision;
+    const contextualTuples = [{ subject: 'User:guest', relation: 'viewer', object: 'Folder:shared' }];
+
+    expect(engine.for('User:guest').can('view').on('Document:1', { contextualTuples })).toBe(true);
+    expect(engine.lookupResources('User:guest', 'view', 'Document', { contextualTuples })).toEqual(['Document:1']);
+    expect(engine.lookupSubjects('Document:1', 'view', 'User', { contextualTuples }).subjects).toEqual(['User:guest']);
+    expect(engine.for('User:guest').check('view').on('Document:1', { contextualTuples }).allowed).toBe(true);
+
+    expect(engine.for('User:guest').can('view').on('Document:1')).toBe(false);
+    expect(engine.read({ subject: 'User:guest' })).toEqual([]);
+    expect(engine.revision).toBe(revision);
+  });
+
+  it('a contextual copy of a stored conditional tuple applies in addition to it', () => {
+    const engine = new ZanzoEngine(schema, { conditions });
+    engine.grant('viewer').to('User:bob').on('Document:1').when('ip_allowlist', { allowed: ['10.0.0.7'] });
+    const options = {
+      context: { ip: '1.2.3.4', hour: 10 },
+      contextualTuples: [
+        { subject: 'User:bob', relation: 'viewer', object: 'Document:1', condition: { name: 'ip_allowlist', context: { allowed: [] } } },
+        { subject: 'User:bob', relation: 'viewer', object: 'Document:1', condition: { name: 'business_hours' } },
+      ],
+    };
+    // The stored condition fails for this ip, the first copy fails, the second holds
+    expect(engine.for('User:bob').can('view').on('Document:1', options)).toBe(true);
+    expect(engine.for('User:bob').can('view').on('Document:1', { ...options, context: { ip: '1.2.3.4', hour: 22 } })).toBe(false);
+    // Stored metadata is intact afterwards
+    expect(engine.read({ object: 'Document:1' })[0]!.condition).toEqual({ name: 'ip_allowlist', context: { allowed: ['10.0.0.7'] } });
+  });
+});

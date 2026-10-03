@@ -9,6 +9,7 @@ import { zanzoTuples } from '../src/schema/sqlite.js';
 import { defineConformanceSuite } from '../../core/conformance/runner';
 import { toLegacySchema } from '../../core/conformance/legacy';
 import { typeOf } from '../../core/conformance/model';
+import { needsRequestContext } from '../../core/conformance/convert';
 
 let DatabaseSync: any;
 try {
@@ -32,7 +33,8 @@ if (!DatabaseSync) {
   defineConformanceSuite(
     {
       name: 'Drizzle adapter + materializeDerivedTuples (current, SQLite)',
-      async create(schema, tuples) {
+      async create(schema, tuples, testCase) {
+        if (needsRequestContext(testCase)) return { unsupported: 'conditions and contextual tuples are evaluated by ZanzoEngine only' };
         const translated = toLegacySchema(schema);
         if ('unsupported' in translated) return translated;
 

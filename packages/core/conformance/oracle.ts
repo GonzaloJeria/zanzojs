@@ -1,4 +1,4 @@
-import { parseExpr, typeOf, type Expr, type NeutralSchema, type NeutralTuple } from './model';
+import { parseExpr, typeOf, type Expr, type NeutralCondition, type NeutralCheckOptions, type NeutralSchema, type NeutralTuple } from './model';
 
 export interface SubjectLookup {
   subjects: string[];
@@ -15,15 +15,36 @@ export interface SubjectLookup {
 export class Oracle {
   private parsed = new Map<string, Expr>();
 
+  private context: Record<string, unknown> | undefined;
+
   constructor(
     private schema: NeutralSchema,
     private tuples: NeutralTuple[],
     private now: number = Date.now(),
+    private conditions: Record<string, NeutralCondition> = {},
   ) {}
 
   /** Does `subject` (an object such as `User:alice`) have `permission` on `object`? */
-  check(object: string, permission: string, subject: string): boolean {
-    return this.evalName(object, permission, subject, new Set());
+  check(object: string, permission: string, subject: string, options: NeutralCheckOptions = {}): boolean {
+    if (options.contextualTuples?.length) {
+      // Contextual tuples hold in addition to the stored ones: a relation applies if either does
+      return new Oracle(this.schema, [...this.tuples, ...options.contextualTuples], this.now, this.conditions).check(object, permission, subject, {
+        ...(options.context ? { context: options.context } : {}),
+      });
+    }
+    this.context = options.context;
+    try {
+      return this.evalName(object, permission, subject, new Set());
+    } finally {
+      this.context = undefined;
+    }
+  }
+
+  /** A tuple applies when it has not expired and its condition, if any, holds. */
+  private applies(t: NeutralTuple): boolean {
+    if (t.expiresAt !== undefined && t.expiresAt <= this.now) return false;
+    if (!t.condition) return true;
+    return this.conditions[t.condition.name]!({ ...this.context, ...t.condition.context });
   }
 
   /** Every object of `type` (known from tuples) on which `subject` has `permission`, sorted. */
@@ -109,9 +130,7 @@ export class Oracle {
   }
 
   private live(object: string, relation: string): NeutralTuple[] {
-    return this.tuples.filter(
-      (t) => t.object === object && t.relation === relation && (t.expiresAt === undefined || t.expiresAt > this.now),
-    );
+    return this.tuples.filter((t) => t.object === object && t.relation === relation && this.applies(t));
   }
 
   private expr(source: string): Expr {
