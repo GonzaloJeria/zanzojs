@@ -29,6 +29,12 @@ export interface CacheOptions {
    * @default 1000
    */
   selectiveThreshold?: number;
+  /**
+   * Maximum number of entries kept in the cache. When exceeded, the least
+   * recently used entry is evicted.
+   * @default 10000
+   */
+  maxEntries?: number;
 }
 
 interface CacheEntry {
@@ -41,11 +47,13 @@ export class PermissionCache {
   private ttlMs: number;
   private invalidationType: 'selective' | 'full';
   private selectiveThreshold: number;
+  private maxEntries: number;
 
   constructor(options: CacheOptions = {}) {
     this.ttlMs = options.ttlMs ?? 5000;
     this.invalidationType = options.invalidationType ?? 'selective';
     this.selectiveThreshold = options.selectiveThreshold ?? 1000;
+    this.maxEntries = Math.max(1, options.maxEntries ?? 10000);
   }
 
   /**
@@ -67,15 +75,25 @@ export class PermissionCache {
       return undefined;
     }
 
+    // Refresh recency: Map iteration order doubles as the LRU order
+    this.cache.delete(key);
+    this.cache.set(key, entry);
+
     return entry.result;
   }
 
   set(actor: string, action: string, resource: string, result: boolean): void {
     const key = PermissionCache.buildKey(actor, action, resource);
+    this.cache.delete(key);
     this.cache.set(key, {
       result,
       expiresAt: Date.now() + this.ttlMs,
     });
+
+    if (this.cache.size > this.maxEntries) {
+      const oldestKey = this.cache.keys().next().value;
+      if (oldestKey !== undefined) this.cache.delete(oldestKey);
+    }
   }
 
   /** 

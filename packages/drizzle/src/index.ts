@@ -9,6 +9,8 @@ export interface ZanzoTupleTable {
   object: AnyColumn; // String e.g. "Invoice:123"
   relation: AnyColumn; // String e.g. "owner"
   subject: AnyColumn;  // String e.g. "User:1"
+  /** Optional expiration column. When present, expired tuples never grant access. */
+  expiresAt?: AnyColumn;
   [key: string]: any; // Allow extensions like IDs or context
 }
 
@@ -71,6 +73,8 @@ export function createZanzoAdapter<TSchema extends SchemaData, TTable extends Za
   // when the adapter instance is shared across requests in persistent servers
   // (Express, Fastify, etc.). See: architectural_review.md §CRÍTICO drizzle.
   const astCache = new Map<string, QueryAST | null>();
+  // Nested-path warnings are emitted once per path instead of on every query
+  const warnedNestedPaths = new Set<string>();
 
   /**
    * Generates a Drizzle SQL AST (subquery strategy) resolving access against the Universal Tuple Table.
@@ -131,7 +135,8 @@ export function createZanzoAdapter<TSchema extends SchemaData, TTable extends Za
         ? [cond.relation, ...cond.nextRelationPath].join(RELATION_PATH_SEPARATOR) 
         : cond.relation;
 
-      if (cond.type === 'nested' && shouldWarn) {
+      if (cond.type === 'nested' && shouldWarn && !warnedNestedPaths.has(fullRelation)) {
+        warnedNestedPaths.add(fullRelation);
         console.warn(`[Zanzo] Nested permission path detected: '${fullRelation}'. The SQL adapter resolves this via pre-materialized tuples. Ensure you used materializeDerivedTuples() when writing this relationship to the database. See: https://zanzo.dev/docs/tuple-expansion`);
       }
 
@@ -148,6 +153,13 @@ export function createZanzoAdapter<TSchema extends SchemaData, TTable extends Za
       relations.add(fullRelation);
     }
 
+    // Temporal permissions: ignore tuples whose expiration has passed. The current time is
+    // bound through the column so its driver mapping (timestamp, integer, text) is respected.
+    const expiresAtColumn = tupleTable.expiresAt as AnyColumn | undefined;
+    const notExpired = expiresAtColumn
+      ? sql` AND (${expiresAtColumn} IS NULL OR ${expiresAtColumn} > ${sql.param(new Date(), expiresAtColumn)})`
+      : sql``;
+
     const sqlConditions: SQL<unknown>[] = [];
 
     for (const [subject, relations] of relationsBySubject.entries()) {
@@ -158,13 +170,13 @@ export function createZanzoAdapter<TSchema extends SchemaData, TTable extends Za
             SELECT 1 FROM ${tupleTable} 
             WHERE ${tupleTable.object} = ${objectString} 
               AND ${tupleTable.relation} = ${relationArray[0]} 
-              AND ${tupleTable.subject} = ${subject}
+              AND ${tupleTable.subject} = ${subject}${notExpired}
           )`
         : sql`EXISTS (
             SELECT 1 FROM ${tupleTable} 
             WHERE ${tupleTable.object} = ${objectString} 
               AND ${tupleTable.relation} IN (${sql.join(relationArray.map(r => sql`${r}`), sql`, `)}) 
-              AND ${tupleTable.subject} = ${subject}
+              AND ${tupleTable.subject} = ${subject}${notExpired}
           )`;
       
       sqlConditions.push(condition);
