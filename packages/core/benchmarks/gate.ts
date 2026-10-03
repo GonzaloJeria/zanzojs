@@ -51,6 +51,13 @@ export function runGate(baselinePath: string, metrics: Metric[]): void {
     return;
   }
 
+  if (process.env['GITHUB_ACTIONS']) {
+    // Annotations are visible in the run summary and through the checks API
+    const table = metrics.map((m) => `${m.name}: ${fmt(m.value)} ${m.unit} (baseline ${baseline[m.name] ?? '-'})`).join('%0A');
+    console.log(`::notice title=${baselinePath.split('/').pop()}::${table}`);
+    for (const failure of failures) console.log(`::error title=Performance gate::${failure}`);
+  }
+
   if (failures.length > 0) {
     console.error(`\nPerformance gate failed:\n  ${failures.join('\n  ')}`);
     process.exit(1);
