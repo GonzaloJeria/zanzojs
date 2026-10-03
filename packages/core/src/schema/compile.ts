@@ -8,9 +8,9 @@ import { parseExpr, formatExpr, ExprSyntaxError, type Expr } from './expr';
  */
 export type Node =
   /** Relation or permission resolved on the type of the object being evaluated */
-  | { kind: 'name'; name: string; label: string }
+  | { kind: 'name'; name: string; label: string; /** Interned name, set by the engine */ nameId?: number }
   /** tuple_to_userset: evaluate `then` on each subject of relation `tupleset` */
-  | { kind: 'arrow'; tupleset: string; then: Node; label: string }
+  | { kind: 'arrow'; tupleset: string; then: Node; label: string; /** Interned relation, set by the engine */ tuplesetId?: number }
   | { kind: 'union' | 'intersection'; children: Node[]; label: string }
   | { kind: 'exclusion'; base: Node; subtract: Node; label: string };
 

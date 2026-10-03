@@ -47,7 +47,7 @@ This is read as: *"PARENT has relation RELATION_NAME with CHILD"*
 
 **Why this direction?**
 
-`ZanzoEngine` indexes tuples as `Map<object, Map<relation, Set<subject>>>`. When evaluating a permission for a resource, the engine starts at the resource (object) and walks upward through subjects toward the actor. For the nested path `workspace.admin` to resolve correctly, the engine must find `Workspace:ws1` as a subject when it looks up `Module:ws1_facturacion` — which only works if the structural tuple is stored as `subject: Workspace, object: Module`.
+`ZanzoEngine` stores tuples as edges (object → relation → subject) over interned integer ids in typed arrays, with a forward list per object and a reverse list per subject (see `packages/core/src/store/memory.ts`). When evaluating a permission for a resource, the engine starts at the resource (object) and walks upward through subjects toward the actor. For the nested path `workspace.admin` to resolve correctly, the engine must find `Workspace:ws1` as a subject when it looks up `Module:ws1_facturacion` — which only works if the structural tuple is stored as `subject: Workspace, object: Module`.
 
 **The invariant:** Every tuple stored in the database must follow this direction without exception. There must be no transformation between storage and engine hydration. If you find yourself inverting tuples before calling `addTuples()`, the tuples in the database are stored with the wrong direction.
 

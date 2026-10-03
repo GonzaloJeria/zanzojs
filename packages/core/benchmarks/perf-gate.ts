@@ -5,6 +5,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';
+import { transformSync } from 'esbuild';
 import { fileURLToPath } from 'node:url';
 import { ZanzoBuilder, ZanzoEngine, createZanzoSnapshot } from '../src/index';
 import { measureMs, runGate, type Metric } from './gate';
@@ -55,14 +56,26 @@ const tuples = buildTuples();
 const docId = (i: number) => `Document:${i % 10}-${i % 20}-${i % 250}` as const;
 
 // ── Memory and hydration ──
-gc();
-const heapBefore = process.memoryUsage().heapUsed;
+// Typed arrays live outside the V8 heap: count their backing stores too
+const memoryInUse = () => {
+  const usage = process.memoryUsage();
+  return usage.heapUsed + usage.arrayBuffers;
+};
+
+// Backing stores of released typed arrays are freed after the GC that collects their
+// wrappers, so a single pass overstates memory: run several before each reading.
+const fullGc = () => {
+  for (let i = 0; i < 3; i++) gc();
+};
+
+fullGc();
+const heapBefore = memoryInUse();
 const engine = new ZanzoEngine(schema);
 const loadStart = performance.now();
 engine.load(tuples);
 const loadMs = performance.now() - loadStart;
-gc();
-const bytesPerTuple = (process.memoryUsage().heapUsed - heapBefore) / tuples.length;
+fullGc();
+const bytesPerTuple = (memoryInUse() - heapBefore) / tuples.length;
 
 // ── Evaluation ──
 const directMs = measureMs(100_000, (i) => {
@@ -85,11 +98,15 @@ const snapshotMs = measureMs(20, (i) => {
 }, 3);
 
 // ── Bundle ──
-const bundle = readFileSync(fileURLToPath(new URL('../dist/index.js', import.meta.url)));
+// Measured minified + gzip: what applications actually ship after their own bundler
+const bundle = transformSync(readFileSync(fileURLToPath(new URL('../dist/index.js', import.meta.url)), 'utf8'), {
+  minify: true,
+  format: 'esm',
+}).code;
 
 const metrics: Metric[] = [
-  { name: 'memory: heap bytes per tuple (100k tuples)', value: bytesPerTuple, unit: 'B', kind: 'size', better: 'lower' },
-  { name: 'bundle: dist/index.js gzip', value: gzipSync(bundle).length, unit: 'B', kind: 'size', better: 'lower' },
+  { name: 'memory: bytes per tuple (100k tuples)', value: bytesPerTuple, unit: 'B', kind: 'size', better: 'lower' },
+  { name: 'bundle: dist/index.js minified + gzip', value: gzipSync(bundle).length, unit: 'B', kind: 'size', better: 'lower' },
   { name: 'load: µs per tuple', value: (loadMs * 1000) / tuples.length, unit: 'µs', kind: 'time', better: 'lower' },
   { name: 'check: direct relation', value: directMs * 1000, unit: 'µs', kind: 'time', better: 'lower' },
   { name: 'check: nested workspace.org.admin', value: nestedMs * 1000, unit: 'µs', kind: 'time', better: 'lower' },
