@@ -25,8 +25,8 @@ Current status:
 | Oracle | 17 / 17 | 0 | 0 |
 | `ZanzoEngine`, expression syntax (with and without cache) | 17 / 17 | 0 | 0 |
 | Snapshot + `ZanzoClient`, expression syntax | 17 / 17 | 0 | 0 |
-| `ZanzoEngine`, legacy array syntax | 8 | 8 | 0 |
-| Drizzle adapter + `materializeDerivedTuples` | 5 | 8 | 3 |
+| `ZanzoEngine`, legacy array syntax | 8 | 9 | 0 |
+| Drizzle adapter + `materializeDerivedTuples` | 5 | 9 | 3 |
 
 Randomized suites: `conformance-random.test.ts` (legacy subset, 200 worlds) and
 `conformance-random-full.test.ts` (full model, 300 worlds) compare checks, `listAccessible`,
