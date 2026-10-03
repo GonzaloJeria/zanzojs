@@ -53,7 +53,10 @@ interface LargeRelation {
   indirect: Set<number>;
 }
 
-function grow<T extends Int32Array | Uint8Array>(array: T, minLength: number, fill?: number): T {
+/** Entity types and relation names are stored in 16 bits. */
+const MAX_SYMBOLS = 0xffff;
+
+function grow<T extends Int32Array | Uint16Array | Uint8Array>(array: T, minLength: number, fill?: number): T {
   if (array.length >= minLength) return array;
   let length = Math.max(array.length * 2, 16);
   while (length < minLength) length *= 2;
@@ -72,19 +75,20 @@ export class MemoryTupleStore {
   entities = new SymbolTable();
 
   // ── Per entity ──
-  entityType = new Int32Array(0);
+  /** Type id; for a wildcard (`User:*`), the type it matches */
+  entityType = new Uint16Array(0);
   kind = new Uint8Array(0);
-  /** Userset: id of the object (`Group:eng`); wildcard: unused */
-  usersetObject = new Int32Array(0);
-  /** Userset: name id of the relation (`member`); wildcard: type id it matches */
-  usersetName = new Int32Array(0);
   forwardHead = new Int32Array(0);
   reverseHead = new Int32Array(0);
-  private forwardCount = new Int32Array(0);
+  /** Edges per object, saturating at 255: only compared with LARGE_OBJECT */
+  private forwardCount = new Uint8Array(0);
+  /** Usersets are rare: object id (`Group:eng`) and relation name id (`member`) by userset id */
+  private readonly usersetObjects = new Map<number, number>();
+  private readonly usersetNames = new Map<number, number>();
 
   // ── Per edge ──
   edgeObject = new Int32Array(0);
-  edgeRelation = new Int32Array(0);
+  edgeRelation = new Uint16Array(0);
   edgeSubject = new Int32Array(0);
   forwardNext = new Int32Array(0);
   private forwardPrev = new Int32Array(0);
@@ -115,34 +119,44 @@ export class MemoryTupleStore {
     const capacity = id + 1;
     this.entityType = grow(this.entityType, capacity);
     this.kind = grow(this.kind, capacity);
-    this.usersetObject = grow(this.usersetObject, capacity);
-    this.usersetName = grow(this.usersetName, capacity);
     this.forwardHead = grow(this.forwardHead, capacity, NONE);
     this.reverseHead = grow(this.reverseHead, capacity, NONE);
     this.forwardCount = grow(this.forwardCount, capacity);
 
-    const typeName = ref.substring(0, ref.indexOf(':'));
-    this.entityType[id] = this.types.intern(typeName);
+    this.entityType[id] = symbol(this.types, ref.substring(0, ref.indexOf(':')));
     if (ref.endsWith(':*')) {
       this.kind[id] = KIND_WILDCARD;
-      this.usersetName[id] = this.entityType[id]!;
     } else {
       const hash = ref.indexOf('#');
       if (hash === -1) {
         this.kind[id] = KIND_OBJECT;
       } else {
-        const object = this.intern(ref.substring(0, hash));
         this.kind[id] = KIND_USERSET;
-        this.usersetObject[id] = object;
-        this.usersetName[id] = this.names.intern(ref.substring(hash + 1));
+        this.usersetObjects.set(id, this.intern(ref.substring(0, hash)));
+        this.usersetNames.set(id, symbol(this.names, ref.substring(hash + 1)));
       }
     }
     return id;
   }
 
+  /** Object of a userset (`Group:eng` for `Group:eng#member`). */
+  usersetObject(userset: number): number {
+    return this.usersetObjects.get(userset)!;
+  }
+
+  /** Relation name id of a userset (`member` for `Group:eng#member`). */
+  usersetName(userset: number): number {
+    return this.usersetNames.get(userset)!;
+  }
+
+  /** Interns a relation name, enforcing the 16-bit limit. */
+  internName(name: string): number {
+    return symbol(this.names, name);
+  }
+
   /** The node a subject is threaded under in the reverse lists. */
   reverseKey(subject: number): number {
-    return this.kind[subject] === KIND_USERSET ? this.usersetObject[subject]! : subject;
+    return this.kind[subject] === KIND_USERSET ? this.usersetObjects.get(subject)! : subject;
   }
 
   /** Edge index of `object#relation@subject`, or NONE. */
@@ -198,7 +212,8 @@ export class MemoryTupleStore {
     if (reverseHead !== NONE) this.reversePrev[reverseHead] = e;
     this.reverseHead[key] = e;
 
-    const count = ++this.forwardCount[object]!;
+    const count = this.forwardCount[object]! + 1;
+    if (count <= 255) this.forwardCount[object] = count;
     const large = this.large.get(object);
     if (large) this.indexLarge(large, e);
     else if (count > LARGE_OBJECT) this.buildLarge(object);
@@ -226,14 +241,22 @@ export class MemoryTupleStore {
     else this.reverseHead[key] = reverseNext;
     if (reverseNext !== NONE) this.reversePrev[reverseNext] = reversePrev;
 
-    this.forwardCount[object]!--;
     const large = this.large.get(object);
     if (large) {
       const relation = large.get(this.edgeRelation[e]!);
       relation?.subjects.delete(subject);
       relation?.indirect.delete(e);
-      if (this.forwardCount[object]! <= LARGE_OBJECT / 2) this.large.delete(object);
     }
+    // The edge is already unlinked: a saturated counter is recounted from the list
+    let count = this.forwardCount[object]!;
+    if (count === 255) {
+      count = 0;
+      for (let f = this.forwardHead[object]!; f !== NONE && count < 255; f = this.forwardNext[f]!) count++;
+    } else {
+      count--;
+    }
+    this.forwardCount[object] = count;
+    if (large && count <= LARGE_OBJECT / 2) this.large.delete(object);
 
     this.expiry.delete(e);
     this.edgeObject[e] = NONE;
@@ -262,8 +285,6 @@ export class MemoryTupleStore {
     const edges = this.edgeHighWater;
     this.entityType = this.entityType.slice(0, entities);
     this.kind = this.kind.slice(0, entities);
-    this.usersetObject = this.usersetObject.slice(0, entities);
-    this.usersetName = this.usersetName.slice(0, entities);
     this.forwardHead = this.forwardHead.slice(0, entities);
     this.reverseHead = this.reverseHead.slice(0, entities);
     this.forwardCount = this.forwardCount.slice(0, entities);
@@ -286,15 +307,15 @@ export class MemoryTupleStore {
   clear(): void {
     // Names and types are kept: compiled schema plans refer to their ids
     this.entities = new SymbolTable();
-    this.entityType = new Int32Array(0);
+    this.entityType = new Uint16Array(0);
     this.kind = new Uint8Array(0);
-    this.usersetObject = new Int32Array(0);
-    this.usersetName = new Int32Array(0);
     this.forwardHead = new Int32Array(0);
     this.reverseHead = new Int32Array(0);
-    this.forwardCount = new Int32Array(0);
+    this.forwardCount = new Uint8Array(0);
+    this.usersetObjects.clear();
+    this.usersetNames.clear();
     this.edgeObject = new Int32Array(0);
-    this.edgeRelation = new Int32Array(0);
+    this.edgeRelation = new Uint16Array(0);
     this.edgeSubject = new Int32Array(0);
     this.forwardNext = new Int32Array(0);
     this.forwardPrev = new Int32Array(0);
@@ -328,3 +349,9 @@ export class MemoryTupleStore {
 }
 
 const EMPTY: Set<number> = new Set();
+
+function symbol(table: SymbolTable, value: string): number {
+  const id = table.intern(value);
+  if (id > MAX_SYMBOLS) throw new RangeError(`[Zanzo] Too many distinct entity types or relation names (limit ${MAX_SYMBOLS}).`);
+  return id;
+}

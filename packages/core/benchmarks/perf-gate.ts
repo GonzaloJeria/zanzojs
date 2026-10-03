@@ -56,25 +56,28 @@ const tuples = buildTuples();
 const docId = (i: number) => `Document:${i % 10}-${i % 20}-${i % 250}` as const;
 
 // ── Memory and hydration ──
-// Typed arrays live outside the V8 heap: count their backing stores too
+// Backing stores of released typed arrays are returned asynchronously after GC, so collect
+// several times with event-loop turns in between before each reading. A first warm-up load
+// absorbs one-time allocations (compiled code, interned schema names).
+const settle = async () => {
+  for (let i = 0; i < 4; i++) {
+    gc();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+};
 const memoryInUse = () => {
   const usage = process.memoryUsage();
   return usage.heapUsed + usage.arrayBuffers;
 };
 
-// Backing stores of released typed arrays are freed after the GC that collects their
-// wrappers, so a single pass overstates memory: run several before each reading.
-const fullGc = () => {
-  for (let i = 0; i < 3; i++) gc();
-};
-
-fullGc();
+new ZanzoEngine(schema).load(tuples);
+await settle();
 const heapBefore = memoryInUse();
 const engine = new ZanzoEngine(schema);
 const loadStart = performance.now();
 engine.load(tuples);
 const loadMs = performance.now() - loadStart;
-fullGc();
+await settle();
 const bytesPerTuple = (memoryInUse() - heapBefore) / tuples.length;
 
 // ── Evaluation ──

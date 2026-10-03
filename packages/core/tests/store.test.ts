@@ -30,10 +30,10 @@ describe('MemoryTupleStore', () => {
 
     expect(store.kind[user]).toBe(KIND_OBJECT);
     expect(store.kind[userset]).toBe(KIND_USERSET);
-    expect(store.entities.values[store.usersetObject[userset]!]).toBe('Group:eng');
-    expect(store.names.values[store.usersetName[userset]!]).toBe('member');
+    expect(store.entities.values[store.usersetObject(userset)]).toBe('Group:eng');
+    expect(store.names.values[store.usersetName(userset)]).toBe('member');
     expect(store.kind[wildcard]).toBe(KIND_WILDCARD);
-    expect(store.types.values[store.usersetName[wildcard]!]).toBe('User');
+    expect(store.types.values[store.entityType[wildcard]!]).toBe('User');
     expect(store.intern('User:alice')).toBe(user);
   });
 
@@ -42,6 +42,27 @@ describe('MemoryTupleStore', () => {
     const doc = store.intern('Doc:1');
     store.add(doc, store.names.intern('viewer'), store.intern('Group:eng#member'));
     expect(reverse(store, store.intern('Group:eng'))).toEqual(['Doc:1#viewer']);
+  });
+
+  it('recounts a saturated edge counter when an object shrinks', () => {
+    const store = new MemoryTupleStore();
+    const org = store.intern('Org:big');
+    const member = store.internName('member');
+    const users = Array.from({ length: 400 }, (_, i) => store.intern(`User:u${i}`));
+    for (const user of users) store.add(org, member, user);
+    expect(store.largeIndirect(org, member)).toBeDefined();
+
+    for (const user of users.slice(0, 390)) store.removeEdge(store.find(org, member, user));
+    // Back under the threshold: the overlay is dropped and lookups walk the list again
+    expect(store.largeIndirect(org, member)).toBeUndefined();
+    expect(forward(store, org)).toHaveLength(10);
+    expect(store.find(org, member, users[395]!)).not.toBe(NONE);
+    expect(store.find(org, member, users[5]!)).toBe(NONE);
+
+    // Growing again rebuilds the overlay
+    for (const user of users.slice(0, 100)) store.add(org, member, user);
+    expect(store.largeIndirect(org, member)).toBeDefined();
+    expect(store.find(org, member, users[50]!)).not.toBe(NONE);
   });
 
   it('matches a reference model under random adds and removes, across the large-object threshold', () => {

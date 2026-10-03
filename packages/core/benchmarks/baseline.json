@@ -1,13 +1,13 @@
 {
-  "memory: bytes per tuple (100k tuples)": 49.07,
-  "bundle: dist/index.js minified + gzip": 10901,
-  "load: µs per tuple": 1.156,
-  "check: direct relation": 0.8647,
-  "check: nested workspace.org.admin": 0.8026,
-  "check: 5 routes, denied": 1.089,
-  "evaluateAllActions: 4 actions": 1.707,
-  "listAccessible: Document (50k docs)": 9.638,
-  "snapshot: Document (50k docs)": 11.29,
-  "lookupResources: Document (50k docs)": 4.074,
-  "lookupSubjects: User on one document": 8.631
+  "memory: bytes per tuple (100k tuples)": 57.88,
+  "bundle: dist/index.js minified + gzip": 11045,
+  "load: µs per tuple": 0.6302,
+  "check: direct relation": 0.6164,
+  "check: nested workspace.org.admin": 0.5842,
+  "check: 5 routes, denied": 0.9037,
+  "evaluateAllActions: 4 actions": 1.626,
+  "listAccessible: Document (50k docs)": 8.8,
+  "snapshot: Document (50k docs)": 8.751,
+  "lookupResources: Document (50k docs)": 4.275,
+  "lookupSubjects: User on one document": 8.969
 }

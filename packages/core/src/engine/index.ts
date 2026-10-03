@@ -431,7 +431,7 @@ export class ZanzoEngine<TSchema extends SchemaData> {
       this.validateInput(tuple.relation, 'relation');
     }
 
-    const { edge } = store.add(store.intern(tuple.object), store.names.intern(tuple.relation), store.intern(tuple.subject));
+    const { edge } = store.add(store.intern(tuple.object), store.internName(tuple.relation), store.intern(tuple.subject));
 
     // Re-adding a tuple replaces its expiration (or removes it)
     const expiresAt = 'expiresAt' in tuple && tuple.expiresAt ? tuple.expiresAt.getTime() : undefined;
@@ -1054,11 +1054,11 @@ export class ZanzoEngine<TSchema extends SchemaData> {
     if (this.isExpired(edge, ctx.now)) return false;
     const store = this.store;
     const subject = store.edgeSubject[edge]!;
-    if (store.kind[subject] === KIND_WILDCARD) return store.usersetName[subject] === ctx.actorType;
+    if (store.kind[subject] === KIND_WILDCARD) return store.entityType[subject] === ctx.actorType;
 
     this.enter(ctx);
     try {
-      return this.evalName(store.usersetObject[subject]!, store.usersetName[subject]!, ctx);
+      return this.evalName(store.usersetObject(subject), store.usersetName(subject), ctx);
     } finally {
       ctx.depth--;
     }
