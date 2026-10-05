@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
-import { ZanzoBuilder, materializeDerivedTuples } from '../src/index';
+import { ZanzoBuilder } from '../src/index';
+import { materializeDerivedTuples } from '../src/materialize';
 
 const schema = new ZanzoBuilder()
   .entity('User', { actions: [], relations: {} })

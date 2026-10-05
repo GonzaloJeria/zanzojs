@@ -194,7 +194,7 @@ The frontend consumes the snapshot via `@zanzojs/react`. See that package for de
 When you grant access via a nested permission path (e.g. `folder.admin`), you must materialize the derived tuples at write time. This is what makes read-time evaluation fast.
 
 ```typescript
-import { materializeDerivedTuples, removeDerivedTuples } from '@zanzojs/core';
+import { materializeDerivedTuples, removeDerivedTuples } from '@zanzojs/core/materialize';
 
 // GRANT — materialize derived tuples when writing to DB
 async function grantAccess(subject: string, relation: string, object: string) {
@@ -393,7 +393,7 @@ changes until `cleanup()` removes them.
 ### `engine.grant(relation).to(subject).on(object)`
 Adds a tuple to the engine's in-memory index.
 
-> **When to use:** Unit tests, development seeds, and permission simulation sandboxes only. In production, write permissions directly to your database and use `expandTuples()`. Mutations via `grant()` are ephemeral and disappear when the request ends.
+> **When to use:** Unit tests, development seeds, and permission simulation sandboxes only. In production, write permissions directly to your database and use `materializeDerivedTuples()` from `@zanzojs/core/materialize`. Mutations via `grant()` are ephemeral and disappear when the request ends.
 ```typescript
 // ✅ Good — in tests
 engine.grant('owner').to('User:alice').on('Document:doc1')

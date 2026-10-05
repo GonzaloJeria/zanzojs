@@ -4,9 +4,9 @@ import {
   ZanzoEngine,
   ZanzoError,
   ZanzoErrorCode,
-  materializeDerivedTuples,
   createZanzoSnapshot,
 } from '../src/index';
+import { materializeDerivedTuples } from '../src/materialize';
 
 // ─── Fix 1: Pipe character rejection ──────────────────────────────────
 

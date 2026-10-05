@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { ZanzoBuilder, ZanzoEngine, ZanzoError, ZanzoErrorCode, materializeDerivedTuples } from '../src/index';
+import { ZanzoBuilder, ZanzoEngine, ZanzoError, ZanzoErrorCode } from '../src/index';
+import { materializeDerivedTuples } from '../src/materialize';
 
 describe('ZANZO_MISSING_RELATION — Schema Validation', () => {
   it('throws MISSING_RELATION when a permission references an undefined relation', () => {

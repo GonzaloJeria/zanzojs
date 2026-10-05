@@ -90,7 +90,7 @@ export const documents = sqliteTable('documents', {
 Whenever a user creates a resource or joins a team, you just insert a Tuple. But since Zanzo uses **Query Pushdown** to make reads blazing fast in SQL, nested relationships (like `workspace.owner` -> `Document.edit`) must be pre-calculated during the write operation using `materializeDerivedTuples()` and removed using `removeDerivedTuples()`.
 
 ```typescript
-import { materializeDerivedTuples } from '@zanzojs/core';
+import { materializeDerivedTuples } from '@zanzojs/core/materialize';
 
 async function assignWorkspaceAdmin(workspaceId: string, userId: string) {
   const baseTuple = { subject: `User:${userId}`, relation: 'admin', object: `Workspace:${workspaceId}` };
@@ -233,7 +233,7 @@ import {
   deduplicateTuples,        // Remove duplicate tuples before INSERT
   uniqueTupleKey,           // Generate unique key string: 'subject|relation|object'
   buildBulkDeleteCondition, // Get triples array for bulk SQL DELETE
-} from '@zanzojs/core';
+} from '@zanzojs/core/materialize';
 
 // Deduplication before INSERT
 const unique = deduplicateTuples([...baseTuples, ...derived]);

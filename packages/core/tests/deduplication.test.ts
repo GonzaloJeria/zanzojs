@@ -3,11 +3,7 @@ import {
   uniqueTupleKey,
   deduplicateTuples,
   buildBulkDeleteCondition,
-  materializeDerivedTuples,
-  expandTuples,
-  removeDerivedTuples,
-  collapseTuples,
-} from '../src/index';
+} from '../src/materialize';
 import type { RelationTuple } from '../src/index';
 
 // ─── uniqueTupleKey ──────────────────────────────────────────────────
@@ -97,13 +93,3 @@ describe('buildBulkDeleteCondition', () => {
   });
 });
 
-// ─── Deprecated Aliases ──────────────────────────────────────────────
-describe('Backward Compatibility — Renamed Functions', () => {
-  it('expandTuples is an alias for materializeDerivedTuples', () => {
-    expect(expandTuples).toBe(materializeDerivedTuples);
-  });
-
-  it('collapseTuples is an alias for removeDerivedTuples', () => {
-    expect(collapseTuples).toBe(removeDerivedTuples);
-  });
-});

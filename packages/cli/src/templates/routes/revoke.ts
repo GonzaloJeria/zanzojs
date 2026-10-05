@@ -28,8 +28,8 @@ function getRevokeBoilerplate(orm: string) {
     };
   }
   return {
-    imports: `import { collapseTuples } from '@zanzojs/core';\n// TODO: Import your DB client and zanzoTuples table`,
-    body: `  const baseTuple = { subject, relation, object };\n\n  // WARNING: collapseTuples is a legacy low-level API. Consider using an official Adapter like @zanzojs/drizzle instead.\n  const derived = await collapseTuples({\n    schema,\n    revokedTuple: baseTuple,\n    fetchChildren: async (parentObject, relation) => {\n      // TODO: Query your database for structural children\n      return [];\n    },\n  });\n\n  // TODO: Delete generated tuples from your database manually\n  // TODO: Invalidate the snapshot cache`
+    imports: `import { removeDerivedTuples } from '@zanzojs/core/materialize';\n// TODO: Import your DB client and zanzoTuples table`,
+    body: `  const baseTuple = { subject, relation, object };\n\n  // WARNING: removeDerivedTuples is a legacy low-level API. Consider using an official Adapter like @zanzojs/drizzle instead.\n  const derived = await removeDerivedTuples({\n    schema,\n    revokedTuple: baseTuple,\n    fetchChildren: async (parentObject, relation) => {\n      // TODO: Query your database for structural children\n      return [];\n    },\n  });\n\n  // TODO: Delete generated tuples from your database manually\n  // TODO: Invalidate the snapshot cache`
   };
 }
 

@@ -22,8 +22,8 @@ ZANZOJS CRITICAL RULES:
    Example: { subject: 'Organization:org1', relation: 'organization', object: 'Project:p1' }
    Never reverse subject and object.
 
-4. NESTED PATHS REQUIRE expandTuples()
-   If your schema has paths like 'organization.admin', you MUST call expandTuples()
+4. NESTED PATHS REQUIRE materializeDerivedTuples() from '@zanzojs/core/materialize'
+   If your schema has paths like 'organization.admin', you MUST call materializeDerivedTuples() from '@zanzojs/core/materialize'
    when writing to the database. Without it, nested paths silently return false.
 
 5. ALWAYS LOAD STRUCTURAL TUPLES

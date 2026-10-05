@@ -72,7 +72,7 @@ Usas `materializeDerivedTuples`.
 ⚠️ **Regla de oro:** El callback `fetchChildren` debe recibir la variable de la transacción `tx` y ejecutar sus queries dentro de ella para evitar *race conditions*.
 
 ```typescript
-import { materializeDerivedTuples, deduplicateTuples } from '@zanzojs/core';
+import { materializeDerivedTuples, deduplicateTuples } from '@zanzojs/core/materialize';
 
 async function assignWorkspaceAdmin(workspaceId: string, userId: string) {
   const baseTuple = { subject: `User:${userId}`, relation: 'admin', object: `Workspace:${workspaceId}` };
@@ -126,7 +126,7 @@ Usas `removeDerivedTuples` y `buildBulkDeleteCondition`.
 ⚠️ **Regla de oro:** El borrado de tuplas debe usar las 3 columnas obligatorias (`eq` sobre object, relation y subject) dentro del loop transaccional. **Si filtras solo por `object` borrarás acceso de terceros.**
 
 ```typescript
-import { removeDerivedTuples, buildBulkDeleteCondition } from '@zanzojs/core';
+import { removeDerivedTuples, buildBulkDeleteCondition } from '@zanzojs/core/materialize';
 
 async function removeWorkspaceAdmin(workspaceId: string, userId: string) {
   const baseTuple = { subject: `User:${userId}`, relation: 'admin', object: `Workspace:${workspaceId}` };
@@ -294,7 +294,7 @@ const snapshot = createZanzoSnapshot(engine, 'User:alice', {
 ### Tuple Helpers
 
 > [!NOTE]
-> Los alias `expandTuples` y `collapseTuples` siguen exportados y son totalmente funcionales de forma idéntica, pero han sido marcados como `@deprecated`. Serán eliminados en v1.0.0. El path de migración es un simple find-and-replace por `materializeDerivedTuples` y `removeDerivedTuples` respectivamente, ya que sus firmas son idénticas.
+> Estos helpers se importan desde `@zanzojs/core/materialize`. Los alias `expandTuples` y `collapseTuples` fueron eliminados: usa `materializeDerivedTuples` y `removeDerivedTuples` (misma firma).
 
 - `deduplicateTuples(tuples)`: Retorna el array sin tuplas repetidas evaluadas por la firma base.
 - `uniqueTupleKey(tuple)`: Retorna la firma: `"User:1|admin|Org:A"`.

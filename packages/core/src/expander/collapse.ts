@@ -88,7 +88,3 @@ export async function removeDerivedTuples(ctx: CollapseContext): Promise<Relatio
   }));
 }
 
-/**
- * @deprecated Use `removeDerivedTuples` instead. Will be removed in v1.0.0.
- */
-export const collapseTuples = removeDerivedTuples;

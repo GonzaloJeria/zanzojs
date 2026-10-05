@@ -2,8 +2,6 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import {
   ZanzoBuilder,
   ZanzoEngine,
-  expandTuples,
-  collapseTuples,
   ref,
   parseEntityRef,
   serializeEntityRef,
@@ -11,6 +9,7 @@ import {
   RELATION_PATH_SEPARATOR,
 } from '../src/index';
 import type { RelationTuple } from '../src/index';
+import { materializeDerivedTuples, removeDerivedTuples } from '../src/materialize';
 
 // ---------------------------------------------------------------------------
 // Shared Schema: Organization + Project + User
@@ -94,9 +93,9 @@ describe('Full ReBAC Flow — Direct Permissions', () => {
 });
 
 // ===========================================================================
-// Suite 2 — Full ReBAC Flow: expandTuples Integration
+// Suite 2 — Full ReBAC Flow: materializeDerivedTuples Integration
 // ===========================================================================
-describe('Full ReBAC Flow — expandTuples Integration', () => {
+describe('Full ReBAC Flow — materializeDerivedTuples Integration', () => {
   it('should derive tuples and allow engine.can() after insertion', async () => {
     const schema = buildOrgProjectSchema();
     const engine = new ZanzoEngine(schema);
@@ -114,7 +113,7 @@ describe('Full ReBAC Flow — expandTuples Integration', () => {
       return [];
     };
 
-    const derived = await expandTuples({
+    const derived = await materializeDerivedTuples({
       schema,
       newTuple: baseTuple,
       fetchChildren,
@@ -246,7 +245,7 @@ describe('Three-Level Transitive Expansion', () => {
       return [];
     };
 
-    const derived = await expandTuples({
+    const derived = await materializeDerivedTuples({
       schema,
       newTuple: baseTuple,
       fetchChildren,
@@ -303,7 +302,7 @@ describe('Cycle Detection', () => {
     expect(elapsed).toBeLessThan(100); // Must complete quickly
   });
 
-  it('expandTuples respects maxExpansionSize to prevent unbounded growth', async () => {
+  it('materializeDerivedTuples respects maxExpansionSize to prevent unbounded growth', async () => {
     const schema = new ZanzoBuilder()
       .entity('User', { actions: [] as const, relations: {} })
       .entity('Container', {
@@ -327,7 +326,7 @@ describe('Cycle Detection', () => {
     };
 
     await expect(
-      expandTuples({
+      materializeDerivedTuples({
         schema,
         newTuple: baseTuple,
         fetchChildren,
@@ -338,9 +337,9 @@ describe('Cycle Detection', () => {
 });
 
 // ===========================================================================
-// Suite 6 — collapseTuples: Basic Revocation
+// Suite 6 — removeDerivedTuples: Basic Revocation
 // ===========================================================================
-describe('collapseTuples — Basic Revocation', () => {
+describe('removeDerivedTuples — Basic Revocation', () => {
   it('should return exactly the derived tuples for deletion', async () => {
     const schema = buildOrgProjectSchema();
 
@@ -350,7 +349,7 @@ describe('collapseTuples — Basic Revocation', () => {
       object: 'Organization:A',
     };
 
-    const tuplesToDelete = await collapseTuples({
+    const tuplesToDelete = await removeDerivedTuples({
       schema,
       revokedTuple,
       fetchChildren: (parentObject, relation) => {
@@ -376,10 +375,10 @@ describe('collapseTuples — Basic Revocation', () => {
 });
 
 // ===========================================================================
-// Suite 7 — collapseTuples: Symmetry with expandTuples
+// Suite 7 — removeDerivedTuples: Symmetry with materializeDerivedTuples
 // ===========================================================================
-describe('collapseTuples — Symmetry with expandTuples', () => {
-  it('should return the exact same tuples as expandTuples for identical input', async () => {
+describe('removeDerivedTuples — Symmetry with materializeDerivedTuples', () => {
+  it('should return the exact same tuples as materializeDerivedTuples for identical input', async () => {
     const schema = buildOrgProjectSchema();
 
     const baseTuple: RelationTuple = {
@@ -395,13 +394,13 @@ describe('collapseTuples — Symmetry with expandTuples', () => {
       return [];
     };
 
-    const expanded = await expandTuples({
+    const expanded = await materializeDerivedTuples({
       schema,
       newTuple: baseTuple,
       fetchChildren,
     });
 
-    const collapsed = await collapseTuples({
+    const collapsed = await removeDerivedTuples({
       schema,
       revokedTuple: baseTuple,
       fetchChildren,
@@ -447,8 +446,8 @@ describe('collapseTuples — Symmetry with expandTuples', () => {
       return [];
     };
 
-    const expanded = await expandTuples({ schema, newTuple: baseTuple, fetchChildren });
-    const collapsed = await collapseTuples({ schema, revokedTuple: baseTuple, fetchChildren });
+    const expanded = await materializeDerivedTuples({ schema, newTuple: baseTuple, fetchChildren });
+    const collapsed = await removeDerivedTuples({ schema, revokedTuple: baseTuple, fetchChildren });
 
     const sortTuples = (arr: RelationTuple[]) =>
       [...arr].sort((a, b) =>
@@ -460,9 +459,9 @@ describe('collapseTuples — Symmetry with expandTuples', () => {
 });
 
 // ===========================================================================
-// Suite 8 — collapseTuples: Three-Level Transitive
+// Suite 8 — removeDerivedTuples: Three-Level Transitive
 // ===========================================================================
-describe('collapseTuples — Three-Level Transitive', () => {
+describe('removeDerivedTuples — Three-Level Transitive', () => {
   it('should identify all derived tuples across three levels for deletion', async () => {
     const schema = new ZanzoBuilder()
       .entity('User', { actions: [] as const, relations: {} })
@@ -488,7 +487,7 @@ describe('collapseTuples — Three-Level Transitive', () => {
       object: 'Company:Acme',
     };
 
-    const tuplesToDelete = await collapseTuples({
+    const tuplesToDelete = await removeDerivedTuples({
       schema,
       revokedTuple,
       fetchChildren: async (parentObject, relation) => {
@@ -513,9 +512,9 @@ describe('collapseTuples — Three-Level Transitive', () => {
 });
 
 // ===========================================================================
-// Suite 9 — collapseTuples: maxCollapseSize limit
+// Suite 9 — removeDerivedTuples: maxCollapseSize limit
 // ===========================================================================
-describe('collapseTuples — maxCollapseSize limit', () => {
+describe('removeDerivedTuples — maxCollapseSize limit', () => {
   it('should throw Security Exception when collapse exceeds maxCollapseSize', async () => {
     const schema = new ZanzoBuilder()
       .entity('User', { actions: [] as const, relations: {} })
@@ -539,7 +538,7 @@ describe('collapseTuples — maxCollapseSize limit', () => {
     };
 
     await expect(
-      collapseTuples({
+      removeDerivedTuples({
         schema,
         revokedTuple,
         fetchChildren,
@@ -550,9 +549,9 @@ describe('collapseTuples — maxCollapseSize limit', () => {
 });
 
 // ===========================================================================
-// Suite 10 — collapseTuples: Empty derivations
+// Suite 10 — removeDerivedTuples: Empty derivations
 // ===========================================================================
-describe('collapseTuples — Empty derivations', () => {
+describe('removeDerivedTuples — Empty derivations', () => {
   it('should return empty array when no nested paths exist for the relation', async () => {
     const schema = new ZanzoBuilder()
       .entity('User', { actions: [] as const, relations: {} })
@@ -569,7 +568,7 @@ describe('collapseTuples — Empty derivations', () => {
       object: 'Document:A',
     };
 
-    const tuplesToDelete = await collapseTuples({
+    const tuplesToDelete = await removeDerivedTuples({
       schema,
       revokedTuple,
       fetchChildren: async () => [],
@@ -587,7 +586,7 @@ describe('collapseTuples — Empty derivations', () => {
       object: 'Organization:Empty',
     };
 
-    const tuplesToDelete = await collapseTuples({
+    const tuplesToDelete = await removeDerivedTuples({
       schema,
       revokedTuple,
       fetchChildren: async () => [], // Org has no projects

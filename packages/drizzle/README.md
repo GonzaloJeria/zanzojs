@@ -143,7 +143,7 @@ export default async function Page() {
 
 When assigning a role that involves nested permission paths, use `materializeDerivedTuples` to materialize all derived tuples atomically.
 ```typescript
-import { materializeDerivedTuples } from '@zanzojs/core';
+import { materializeDerivedTuples } from '@zanzojs/core/materialize';
 
 async function grantAccess(userId: string, relation: string, objectId: string) {
   const baseTuple = {
@@ -174,7 +174,7 @@ async function grantAccess(userId: string, relation: string, objectId: string) {
 
 `removeDerivedTuples` is the symmetric inverse of `materializeDerivedTuples`. It identifies all derived tuples to delete.
 ```typescript
-import { removeDerivedTuples } from '@zanzojs/core';
+import { removeDerivedTuples } from '@zanzojs/core/materialize';
 
 async function revokeAccess(userId: string, relation: string, objectId: string) {
   const baseTuple = {

@@ -12,7 +12,7 @@ import { ZanzoBuilder, ZanzoEngine } from '@zanzojs/core';
  * Module:
  *   - CRUD actions: create, read, update, delete
  *   - Roles: manager (full CRUD), contributor (CRU), editor (RU), viewer (R)
- *   - workspace.admin inherits full CRUD via expandTuples
+ *   - workspace.admin inherits full CRUD via materializeDerivedTuples
  */
 export const schema = new ZanzoBuilder()
   .entity('User', {

@@ -361,29 +361,6 @@ export class ZanzoEngine<TSchema extends SchemaData> {
     return this.store.revision;
   }
 
-  /**
-   * Returns the stored tuples as nested maps (object → relation → subjects).
-   * The engine stores tuples in a compact form, so this view is materialized on every call
-   * (O(tuples)). Prefer `listAccessible`, `createZanzoSnapshot` or `can` in hot paths.
-   *
-   * @deprecated Will be removed in v1.0.0.
-   */
-  public getIndex(): ReadonlyMap<string, ReadonlyMap<string, ReadonlySet<string>>> {
-    // Materialized on demand from the compact store
-    const store = this.store;
-    const index = new Map<string, Map<string, Set<string>>>();
-    store.forEachEdge((e) => {
-      const object = store.entities.values[store.edgeObject[e]!]!;
-      const relation = store.names.values[store.edgeRelation[e]!]!;
-      let relations = index.get(object);
-      if (!relations) index.set(object, (relations = new Map()));
-      let subjects = relations.get(relation);
-      if (!subjects) relations.set(relation, (subjects = new Set()));
-      subjects.add(store.entities.values[store.edgeSubject[e]!]!);
-    });
-    return index;
-  }
-
   // ZANZO-REVIEW: Extraído según la especificación (validateActorInput). 
   // Nota: hemos agrupado `resourceType` bajo su propia directriz, pero mantenemos esta abstracción idéntica
   // a cómo se extrae la validación limpia del actor tal y como solicitaste.
@@ -488,11 +465,11 @@ export class ZanzoEngine<TSchema extends SchemaData> {
    * Injects a relation tuple into the in-memory store.
    * Issue #3: Validates all tuple fields before storing to prevent graph poisoning.
    *
-   * @deprecated Use `engine.grant(relation).to(subject).on(object)` instead.
-   * Will be removed in v1.0.0.
+   * Re-adding an existing tuple replaces its expiration and condition.
+   * The fluent `engine.grant(relation).to(subject).on(object)` is equivalent.
    */
-  public addTuple(tuple: RelationTuple | Tuple, skipCacheInvalidation: boolean = false): void {
-    return this.mutate(() => this.addTupleNow(tuple, skipCacheInvalidation));
+  public addTuple(tuple: RelationTuple | Tuple): void {
+    return this.mutate(() => this.addTupleNow(tuple));
   }
 
   /** @see {@link ZanzoEngine.addTuple} */
@@ -536,8 +513,7 @@ export class ZanzoEngine<TSchema extends SchemaData> {
   /**
    * Injects multiple relation tuples into the in-memory store.
    *
-   * @deprecated Use `engine.load(tuples)` instead.
-   * Will be removed in v1.0.0.
+   * Unlike `load`, tuples that are already expired are stored as well.
    */
   public addTuples(tuples: (RelationTuple | Tuple)[]): void {
     return this.mutate(() => this.addTuplesNow(tuples));
@@ -547,7 +523,7 @@ export class ZanzoEngine<TSchema extends SchemaData> {
   private addTuplesNow(tuples: (RelationTuple | Tuple)[]): void {
     const isLargeBatch = tuples.length > 50;
     for (const tuple of tuples) {
-      this.addTuple(tuple, isLargeBatch);
+      this.addTupleNow(tuple, isLargeBatch);
     }
     // For large loads, do an O(1) bulk clear at the end instead of N independent DFS operations
     if (isLargeBatch && tuples.length > 0) {
@@ -557,7 +533,7 @@ export class ZanzoEngine<TSchema extends SchemaData> {
 
   /**
    * Hydrates the engine with tuples loaded from an external source (e.g. database).
-   * Use this instead of `addTuples()` when loading existing relationships at request time.
+   * Prefer this over `addTuples()` when loading existing relationships at request time.
    * Supports `expiresAt` for temporal permissions — expired tuples are silently ignored.
    *
    * **Semantic difference:**
@@ -584,7 +560,7 @@ export class ZanzoEngine<TSchema extends SchemaData> {
       if ('expiresAt' in tuple && tuple.expiresAt && tuple.expiresAt.getTime() <= now) {
         continue; // Silently skip expired tuples during hydration
       }
-      this.addTuple(tuple, isLargeBatch);
+      this.addTupleNow(tuple, isLargeBatch);
       loadedCount++;
     }
 
@@ -618,10 +594,10 @@ export class ZanzoEngine<TSchema extends SchemaData> {
 
   /**
    * Removes a specific tuple from the in-memory store.
-   * Used internally by the Fluent API's revoke chain.
+   * The fluent `engine.revoke(relation).from(subject).on(object)` is equivalent.
    */
-  public removeTuple(tuple: RelationTuple | Tuple, skipCacheInvalidation: boolean = false): void {
-    return this.mutate(() => this.removeTupleNow(tuple, skipCacheInvalidation));
+  public removeTuple(tuple: RelationTuple | Tuple): void {
+    return this.mutate(() => this.removeTupleNow(tuple));
   }
 
   /** @see {@link ZanzoEngine.removeTuple} */
@@ -654,7 +630,7 @@ export class ZanzoEngine<TSchema extends SchemaData> {
       this.trackExpiry(expiresAt.getTime());
       this.invalidateCacheFor(tuple.object);
     } else {
-      this.addTuple({ ...tuple, expiresAt });
+      this.addTupleNow({ ...tuple, expiresAt });
     }
   }
 
@@ -674,7 +650,7 @@ export class ZanzoEngine<TSchema extends SchemaData> {
       this.store.setCondition(edge, condition);
       this.invalidateCacheFor(tuple.object);
     } else {
-      this.addTuple({ ...tuple, condition });
+      this.addTupleNow({ ...tuple, condition });
     }
   }
 
@@ -879,8 +855,7 @@ export class ZanzoEngine<TSchema extends SchemaData> {
    * @param resource The target resource entity string identifier (e.g., 'Project:A')
    * @returns boolean True if authorized, false otherwise.
    *
-   * @deprecated Use `engine.for(actor).can(action).on(resource)` instead.
-   * Will be removed in v1.0.0.
+   * The fluent `engine.for(actor).can(action).on(resource)` is equivalent.
    */
   public can<
     TResourceName extends Extract<ExtractSchemaResources<TSchema>, string>,

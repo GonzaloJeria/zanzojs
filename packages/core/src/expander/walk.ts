@@ -15,7 +15,7 @@ export interface WalkResult {
 }
 
 /**
- * Shared traversal algorithm used by both `expandTuples` and `collapseTuples`.
+ * Shared traversal algorithm used by both `materializeDerivedTuples` and `removeDerivedTuples`.
  * Walks the schema graph starting from an initial tuple, discovering all
  * derived tuples that nested permission paths require.
  *

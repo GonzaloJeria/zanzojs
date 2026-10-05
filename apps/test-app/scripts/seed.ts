@@ -4,7 +4,7 @@
  * Creates 3 workspaces, 3 module types, workspace-module associations,
  * and 3 users with distinct access patterns:
  *
- *   alice  — admin of ws1. Via expandTuples → workspace.admin on all ws1 modules
+ *   alice  — admin of ws1. Via materializeDerivedTuples → workspace.admin on all ws1 modules
  *            → full CRUD (create, read, update, delete) on all ws1 modules.
  *
  *   bob    — contributor on Module:ws1_facturacion (create + read + update)
@@ -16,7 +16,7 @@
  */
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { materializeDerivedTuples, deduplicateTuples } from '@zanzojs/core';
+import { materializeDerivedTuples, deduplicateTuples } from '@zanzojs/core/materialize';
 import { engine } from '../src/lib/zanzo';
 import { zanzoTuples, workspaces, modules, workspaceModules } from '../src/db/schema';
 import { eq, and } from 'drizzle-orm';
@@ -34,7 +34,7 @@ const db = drizzle(sqlite, {
   schema: { zanzoTuples, workspaces, modules, workspaceModules },
 });
 
-/** Shared fetchChildren callback for expandTuples */
+/** Shared fetchChildren callback for materializeDerivedTuples */
 async function fetchChildren(parentObject: string, relationToChildren: string): Promise<string[]> {
   // Question: "What objects (Modules) have this `parentObject` (Workspace) as their subject via `relationToChildren`?"
   const rows = db
@@ -89,7 +89,7 @@ async function seed() {
 
   // ─── Structural tuples: Module → workspace → Workspace ─────────────────
   // These link each module instance to its parent workspace.
-  // Required for expandTuples to discover child modules.
+  // Required for materializeDerivedTuples to discover child modules.
   const structuralTuples = [
     { subject: 'Workspace:ws1', relation: 'workspace', object: 'Module:ws1_facturacion' },
     { subject: 'Workspace:ws1', relation: 'workspace', object: 'Module:ws1_rrhh' },
@@ -103,7 +103,7 @@ async function seed() {
 
   // ═══════════════════════════════════════════════════════════════════════
   // ALICE: admin of Workspace:ws1
-  // expandTuples derives: User:alice → workspace.admin → Module:ws1_*
+  // materializeDerivedTuples derives: User:alice → workspace.admin → Module:ws1_*
   // This gives alice full CRUD on all ws1 modules (create, read, update, delete).
   // ═══════════════════════════════════════════════════════════════════════
   const aliceBaseTuple = {

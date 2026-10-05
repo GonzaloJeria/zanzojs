@@ -28,8 +28,8 @@ function getGrantBoilerplate(orm: string) {
     };
   }
   return {
-    imports: `import { expandTuples } from '@zanzojs/core';\n// TODO: Import your DB client and zanzoTuples table`,
-    body: `  const baseTuple = { subject, relation, object };\n\n  // WARNING: expandTuples is a legacy low-level API. Consider using an official Adapter like @zanzojs/drizzle instead.\n  const derived = await expandTuples({\n    schema,\n    newTuple: baseTuple,\n    fetchChildren: async (parentObject, relation) => {\n      // TODO: Query your database for structural children\n      return [];\n    },\n  });\n\n  // TODO: Insert tuples into your database manually\n  // TODO: Invalidate the snapshot cache`
+    imports: `import { materializeDerivedTuples } from '@zanzojs/core/materialize';\n// TODO: Import your DB client and zanzoTuples table`,
+    body: `  const baseTuple = { subject, relation, object };\n\n  // WARNING: materializeDerivedTuples is a legacy low-level API. Consider using an official Adapter like @zanzojs/drizzle instead.\n  const derived = await materializeDerivedTuples({\n    schema,\n    newTuple: baseTuple,\n    fetchChildren: async (parentObject, relation) => {\n      // TODO: Query your database for structural children\n      return [];\n    },\n  });\n\n  // TODO: Insert tuples into your database manually\n  // TODO: Invalidate the snapshot cache`
   };
 }
 

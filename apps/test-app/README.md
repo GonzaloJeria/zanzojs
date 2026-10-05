@@ -1,6 +1,6 @@
 # 🌌 Zanzo Test App — Multi-Workspace Portal
 
-> End-to-end demo of [Zanzo](../../README.md) ReBAC with granular CRUD permissions, `expandTuples` tuple materialization, and React snapshot hydration.
+> End-to-end demo of [Zanzo](../../README.md) ReBAC with granular CRUD permissions, `materializeDerivedTuples` tuple materialization, and React snapshot hydration.
 
 ---
 
@@ -9,7 +9,7 @@
 This is a **Next.js 14 + SQLite** application that runs entirely inside the Zanzo monorepo without publishing any package to npm. It proves the full ReBAC lifecycle:
 
 1. **Schema Definition** → Define entities, roles, and nested permission paths
-2. **Tuple Expansion** → `expandTuples()` pre-materializes derived tuples at write time
+2. **Tuple Expansion** → `materializeDerivedTuples()` pre-materializes derived tuples at write time
 3. **Snapshot Compilation** → `createZanzoSnapshot()` creates a flat permission map server-side
 4. **Client Hydration** → `ZanzoProvider` + `useZanzo().can()` for O(1) permission checks in the browser
 
@@ -90,7 +90,7 @@ export const schema = new ZanzoBuilder()
 export const engine = new ZanzoEngine(schema);
 ```
 
-**Key insight:** The `workspace.admin` nested path means: *"If a user is `admin` of the `Workspace` linked via the `workspace` relation on this Module, they inherit this permission."* This is **not** resolved at query time — it requires pre-materialized tuples via `expandTuples`.
+**Key insight:** The `workspace.admin` nested path means: *"If a user is `admin` of the `Workspace` linked via the `workspace` relation on this Module, they inherit this permission."* This is **not** resolved at query time — it requires pre-materialized tuples via `materializeDerivedTuples`.
 
 ---
 
@@ -119,14 +119,14 @@ export const workspaceModules = sqliteTable('workspace_modules', { ... });
 
 ---
 
-### Step 3: Seed Data with `expandTuples`
+### Step 3: Seed Data with `materializeDerivedTuples`
 
 **File:** [`scripts/seed.ts`](./scripts/seed.ts)
 
-This is where the magic happens. When assigning Alice as admin of Workspace 1, `expandTuples` automatically generates all derived tuples:
+This is where the magic happens. When assigning Alice as admin of Workspace 1, `materializeDerivedTuples` automatically generates all derived tuples:
 
 ```typescript
-import { expandTuples } from '@zanzojs/core';
+import { materializeDerivedTuples } from '@zanzojs/core';
 
 // Base tuple: Alice is admin of ws1
 const baseTuple = {
@@ -135,10 +135,10 @@ const baseTuple = {
   object: 'Workspace:ws1',
 };
 
-// expandTuples walks the schema graph and finds:
+// materializeDerivedTuples walks the schema graph and finds:
 // "Module has a workspace.admin permission path → find all Modules
 //  linked to Workspace:ws1 via the 'workspace' relation"
-const derived = await expandTuples({
+const derived = await materializeDerivedTuples({
   schema: engine.getSchema(),
   newTuple: baseTuple,
   fetchChildren: async (parentObject, relationToChildren) => {
@@ -201,7 +201,7 @@ export async function GET(request: NextRequest) {
 }
 ```
 
-**Grant/Revoke APIs** use `expandTuples` and `collapseTuples` respectively to manage derived tuples when roles change at runtime.
+**Grant/Revoke APIs** use `materializeDerivedTuples` and `removeDerivedTuples` respectively to manage derived tuples when roles change at runtime.
 
 ---
 
@@ -257,7 +257,7 @@ const isAllowed = engine.for('User:alice').can('read').on('Module:ws1_facturacio
 apps/test-app/
 ├── data/dev.db                    ← SQLite database (gitignored)
 ├── drizzle.config.ts              ← Drizzle Kit config
-├── scripts/seed.ts                ← Seed script with expandTuples
+├── scripts/seed.ts                ← Seed script with materializeDerivedTuples
 ├── src/
 │   ├── db/
 │   │   ├── index.ts               ← DB connection (better-sqlite3)
@@ -270,8 +270,8 @@ apps/test-app/
 │       ├── globals.css            ← Dark theme UI
 │       ├── api/
 │       │   ├── permissions/route.ts  ← GET snapshot
-│       │   ├── grant/route.ts        ← POST expandTuples + insert
-│       │   └── revoke/route.ts       ← POST collapseTuples + delete
+│       │   ├── grant/route.ts        ← POST materializeDerivedTuples + insert
+│       │   └── revoke/route.ts       ← POST removeDerivedTuples + delete
 │       └── workspace/
 │           └── [workspaceId]/page.tsx ← Dynamic workspace view
 └── package.json
@@ -307,7 +307,7 @@ Workspace:ws2 → workspace → Module:ws2_facturacion
 Workspace:ws2 → workspace → Module:ws2_rrhh
 Workspace:ws3 → workspace → Module:ws3_reportes
 
-── Alice (base + 3 derived via expandTuples) ──
+── Alice (base + 3 derived via materializeDerivedTuples) ──
 User:alice → admin            → Workspace:ws1            ← base
 User:alice → workspace.admin  → Module:ws1_facturacion    ← derived
 User:alice → workspace.admin  → Module:ws1_rrhh           ← derived

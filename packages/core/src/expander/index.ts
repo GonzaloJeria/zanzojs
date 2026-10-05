@@ -197,10 +197,6 @@ export async function materializeDerivedTuples(
   }));
 }
 
-/**
- * @deprecated Use `materializeDerivedTuples` instead. Will be removed in v1.0.0.
- */
-export const expandTuples = materializeDerivedTuples;
 
 // ─── Tuple Helpers ─────────────────────────────────────────────────
 

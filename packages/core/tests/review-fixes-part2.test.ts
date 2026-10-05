@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ZanzoBuilder, ZanzoEngine, ZanzoError, ZanzoErrorCode } from '../src/index';
-import { materializeDerivedTuples } from '../src/expander/index';
+import { materializeDerivedTuples } from '../src/materialize';
 
 describe('Fix 6: Deterministic Date.now() in temporal evaluations', () => {
   it('captures Date.now() exactly once to ensure deterministic evaluation across deep graphs', () => {

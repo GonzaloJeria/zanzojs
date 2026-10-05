@@ -8,9 +8,6 @@ export type { CheckResult, TraceStep } from './engine/trace';
 export * from './ast/index';
 export * from './compiler/index';
 export * from './client/index';
-export * from './expander/index';
-export { collapseTuples, removeDerivedTuples } from './expander/collapse';
-export type { CollapseContext } from './expander/collapse';
 export {
   ForBuilder,
   CanBuilder,

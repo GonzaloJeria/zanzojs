@@ -11,14 +11,14 @@ import { ZanzoError, ZanzoErrorCode } from '../errors';
 
 /**
  * The canonical separator used to join EntityRef parts into a string.
- * Both expandTuples and the Drizzle adapter depend on this constant.
+ * Both materializeDerivedTuples and the Drizzle adapter depend on this constant.
  * Never hardcode ':' for entity refs anywhere else in the codebase.
  */
 export const ENTITY_REF_SEPARATOR = ':' as const;
 
 /**
  * The canonical separator used to join nested relation path segments.
- * Both expandTuples and the Drizzle adapter depend on this constant.
+ * Both materializeDerivedTuples and the Drizzle adapter depend on this constant.
  * Never hardcode '.' for relation paths anywhere else in the codebase.
  */
 export const RELATION_PATH_SEPARATOR = '.' as const;

@@ -37,7 +37,7 @@ describe('Zanzo Enterprise Stress & Performance Tests', () => {
     
     // Pre-load memory indexes
     engine.addTuples(tuples);
-    expect(engine.getIndex().size).toBeGreaterThan(10000);
+    expect(engine.read({ relation: 'parent' }).length).toBe(10100);
 
     // 3. Mark precise execution time baseline
     const startMemory = process.memoryUsage().heapUsed;

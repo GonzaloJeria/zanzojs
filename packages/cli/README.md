@@ -28,8 +28,8 @@ zanzojs check
 - **`zanzo.config.ts`** — Your ZanzoJS schema with the entities you specified
 - **`zanzo-migration.sql`** — The Universal Tuple Table migration for your database
 - **`src/app/api/permissions/route.ts`** — Snapshot compilation endpoint
-- **`src/app/api/grant/route.ts`** — Permission grant endpoint with expandTuples
-- **`src/app/api/revoke/route.ts`** — Permission revoke endpoint with collapseTuples
+- **`src/app/api/grant/route.ts`** — Permission grant endpoint with materializeDerivedTuples
+- **`src/app/api/revoke/route.ts`** — Permission revoke endpoint with removeDerivedTuples
 - **`.cursorrules` / `CLAUDE.md` / `.windsurfrules`** — Agent context rules for your IDE
 
 ## Documentation

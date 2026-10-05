@@ -25,6 +25,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
+    },
+    "./materialize": {
+      "types": "./dist/materialize.d.ts",
+      "import": "./dist/materialize.js",
+      "require": "./dist/materialize.cjs"
     }
   },
   "main": "./dist/index.cjs",

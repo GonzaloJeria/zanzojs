@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { removeDerivedTuples, buildBulkDeleteCondition } from '@zanzojs/core';
+import { removeDerivedTuples, buildBulkDeleteCondition } from '@zanzojs/core/materialize';
 import { engine } from '@/lib/zanzo';
 import { db } from '@/db';
 import { zanzoTuples } from '@/db/schema';
