@@ -111,10 +111,8 @@ engine.grant('viewer').to('User:*').on('Document:changelog');      // public
 | `'User:*'` | a relation subject type accepting every User (`grant(...).to('User:*')`) |
 | `'Group#member'` | a relation subject type accepting the members of a Group (`to('Group:eng#member')`) |
 
-> The SQL adapter (`@zanzojs/drizzle`) evaluates unions of paths, including permissions that
-> reference other permissions. Intersections, exclusions, recursive permissions, usersets and
-> wildcards are evaluated by `ZanzoEngine`; `buildDatabaseQuery` throws `ZANZO_UNSUPPORTED_FEATURE`
-> for them until the adapter supports them.
+> Every schema feature works with a database through [`@zanzojs/sql`](../sql). The legacy
+> `@zanzojs/drizzle` adapter (deprecated) only supports unions of paths.
 
 ### Step 2: Load tuples for the current user only
 
