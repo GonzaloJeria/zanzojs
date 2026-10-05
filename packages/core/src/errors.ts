@@ -45,6 +45,14 @@ export const ZanzoErrorCode = {
   EXPANSION_ABORTED: 'ZANZO_EXPANSION_ABORTED',
   /** The schema is malformed: expression syntax, unknown subject types or recursive computed permissions */
   INVALID_SCHEMA: 'ZANZO_INVALID_SCHEMA',
+  /** A write was rejected because a precondition did not hold; nothing was applied */
+  PRECONDITION_FAILED: 'ZANZO_PRECONDITION_FAILED',
+  /** A `create` update targets a tuple that already exists; nothing was applied */
+  TUPLE_ALREADY_EXISTS: 'ZANZO_TUPLE_ALREADY_EXISTS',
+  /** A write request is malformed (unknown operation, duplicated tuple, missing filter) */
+  INVALID_WRITE: 'ZANZO_INVALID_WRITE',
+  /** Watch is disabled or the requested changes are no longer retained */
+  WATCH_EXPIRED: 'ZANZO_WATCH_EXPIRED',
   /** A tuple references a condition that is not registered on the engine */
   INVALID_CONDITION: 'ZANZO_INVALID_CONDITION',
   /** The schema uses a feature this evaluator or adapter does not support yet */

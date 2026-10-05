@@ -80,6 +80,49 @@ export type ExpandTree =
   /** A permission reached again while expanding itself */
   | { type: 'cycle'; object: string; permission: string };
 
+/** One operation of `engine.write()`. */
+export interface TupleUpdate {
+  /**
+   * - `create`: add the tuple; fails the whole write if it already exists (and is not expired)
+   * - `touch`: add the tuple or replace its expiration and condition
+   * - `delete`: remove the tuple if it exists
+   */
+  operation: 'create' | 'touch' | 'delete';
+  tuple: Tuple;
+}
+
+/** A condition on the stored tuples that must hold for `engine.write()` to apply. */
+export interface WritePrecondition {
+  /** `must_match`: at least one live tuple matches the filter; `must_not_match`: none does */
+  operation: 'must_match' | 'must_not_match';
+  filter: TupleFilter;
+}
+
+export interface WriteRequest {
+  updates: TupleUpdate[];
+  preconditions?: WritePrecondition[];
+}
+
+export interface WriteResult {
+  /** The engine revision after the write */
+  revision: number;
+}
+
+/** One entry of the change log returned by `engine.watch()`. */
+export interface TupleChange {
+  /** Revision produced by the operation that made the change */
+  revision: number;
+  /** `touch`: the tuple was added or its expiration/condition changed; `clear`: every tuple was removed */
+  operation: 'touch' | 'delete' | 'clear';
+  /** The tuple as it is after a touch, or as it was before a delete; absent for `clear` */
+  tuple?: Tuple;
+}
+
+export interface WatchOptions {
+  /** Maximum number of changes kept; older revisions are dropped whole. @default 10000 */
+  retention?: number;
+}
+
 /** Options for `new ZanzoEngine(schema, options)`. */
 export interface EngineOptions {
   /**
@@ -155,6 +198,13 @@ export class ZanzoEngine<TSchema extends SchemaData> {
   // During a request with contextual tuples identical to stored ones: each contextual
   // expiration/condition, which apply in addition to the stored edge's own
   private contextualOverlay = new Map<number, { expiresAt: number | undefined; condition: TupleCondition | undefined }[]>();
+  // Watch: change log (null when disabled), its retention, the revision before its oldest entry
+  private watchLog: TupleChange[] | null = null;
+  private watchRetention = 10_000;
+  private watchTruncatedAt = 0;
+  private watchListeners = new Set<(change: TupleChange) => void>();
+  // Depth of nested public mutations; only the outermost one produces a revision
+  private mutationDepth = 0;
   // Earliest future expiration among stored tuples. Once `Date.now()` crosses it,
   // cached results may be stale, so the cache is cleared once and the boundary recomputed.
   private nextExpiry = Number.POSITIVE_INFINITY;
@@ -442,21 +492,14 @@ export class ZanzoEngine<TSchema extends SchemaData> {
    * Will be removed in v1.0.0.
    */
   public addTuple(tuple: RelationTuple | Tuple, skipCacheInvalidation: boolean = false): void {
-    const store = this.store;
-    if (store.entities.get(tuple.subject) === undefined) {
-      this.validateInput(tuple.subject, 'subject');
-      this.validateFieldSeparator(tuple.subject, 'subject');
-    }
-    if (store.entities.get(tuple.object) === undefined) {
-      this.validateInput(tuple.object, 'object');
-      this.validateFieldSeparator(tuple.object, 'object');
-    }
-    if (store.names.get(tuple.relation) === undefined) {
-      this.validateInput(tuple.relation, 'relation');
-    }
+    return this.mutate(() => this.addTupleNow(tuple, skipCacheInvalidation));
+  }
 
+  /** @see {@link ZanzoEngine.addTuple} */
+  private addTupleNow(tuple: RelationTuple | Tuple, skipCacheInvalidation: boolean = false): void {
+    const store = this.store;
+    this.validateTuple(tuple);
     const condition = 'condition' in tuple ? tuple.condition : undefined;
-    if (condition !== undefined) this.validateCondition(condition);
 
     const { edge } = store.add(store.intern(tuple.object), store.internName(tuple.relation), store.intern(tuple.subject));
 
@@ -472,6 +515,24 @@ export class ZanzoEngine<TSchema extends SchemaData> {
     }
   }
 
+  /** Validates a tuple's references, relation and condition without storing it. */
+  private validateTuple(tuple: RelationTuple | Tuple): void {
+    const store = this.store;
+    if (store.entities.get(tuple.subject) === undefined) {
+      this.validateInput(tuple.subject, 'subject');
+      this.validateFieldSeparator(tuple.subject, 'subject');
+    }
+    if (store.entities.get(tuple.object) === undefined) {
+      this.validateInput(tuple.object, 'object');
+      this.validateFieldSeparator(tuple.object, 'object');
+    }
+    if (store.names.get(tuple.relation) === undefined) {
+      this.validateInput(tuple.relation, 'relation');
+    }
+    const condition = 'condition' in tuple ? tuple.condition : undefined;
+    if (condition !== undefined) this.validateCondition(condition);
+  }
+
   /**
    * Injects multiple relation tuples into the in-memory store.
    *
@@ -479,6 +540,11 @@ export class ZanzoEngine<TSchema extends SchemaData> {
    * Will be removed in v1.0.0.
    */
   public addTuples(tuples: (RelationTuple | Tuple)[]): void {
+    return this.mutate(() => this.addTuplesNow(tuples));
+  }
+
+  /** @see {@link ZanzoEngine.addTuples} */
+  private addTuplesNow(tuples: (RelationTuple | Tuple)[]): void {
     const isLargeBatch = tuples.length > 50;
     for (const tuple of tuples) {
       this.addTuple(tuple, isLargeBatch);
@@ -504,6 +570,11 @@ export class ZanzoEngine<TSchema extends SchemaData> {
    * engine.load(rows)
    */
   public load(tuples: (RelationTuple | Tuple)[]): void {
+    return this.mutate(() => this.loadNow(tuples));
+  }
+
+  /** @see {@link ZanzoEngine.load} */
+  private loadNow(tuples: (RelationTuple | Tuple)[]): void {
     const now = Date.now();
     // Large batches skip per-tuple selective invalidation and clear the cache once at the end
     const isLargeBatch = tuples.length > 50;
@@ -550,6 +621,11 @@ export class ZanzoEngine<TSchema extends SchemaData> {
    * Used internally by the Fluent API's revoke chain.
    */
   public removeTuple(tuple: RelationTuple | Tuple, skipCacheInvalidation: boolean = false): void {
+    return this.mutate(() => this.removeTupleNow(tuple, skipCacheInvalidation));
+  }
+
+  /** @see {@link ZanzoEngine.removeTuple} */
+  private removeTupleNow(tuple: RelationTuple | Tuple, skipCacheInvalidation: boolean = false): void {
     const edge = this.findEdge(tuple);
     if (edge !== NONE) this.store.removeEdge(edge);
 
@@ -566,6 +642,11 @@ export class ZanzoEngine<TSchema extends SchemaData> {
    * @internal Used by GrantOnBuilder.until()
    */
   public updateTupleExpiration(tuple: RelationTuple | Tuple, expiresAt: Date): void {
+    return this.mutate(() => this.updateTupleExpirationNow(tuple, expiresAt));
+  }
+
+  /** @see {@link ZanzoEngine.updateTupleExpiration} */
+  private updateTupleExpirationNow(tuple: RelationTuple | Tuple, expiresAt: Date): void {
     const edge = this.findEdge(tuple);
     if (edge !== NONE) {
       // Update metadata in place — the tuple stays stored the entire time
@@ -582,6 +663,11 @@ export class ZanzoEngine<TSchema extends SchemaData> {
    * @internal Used by GrantOnBuilder.when()
    */
   public updateTupleCondition(tuple: RelationTuple | Tuple, condition: TupleCondition): void {
+    return this.mutate(() => this.updateTupleConditionNow(tuple, condition));
+  }
+
+  /** @see {@link ZanzoEngine.updateTupleCondition} */
+  private updateTupleConditionNow(tuple: RelationTuple | Tuple, condition: TupleCondition): void {
     this.validateCondition(condition);
     const edge = this.findEdge(tuple);
     if (edge !== NONE) {
@@ -643,6 +729,11 @@ export class ZanzoEngine<TSchema extends SchemaData> {
    * Clears all relation tuples in the memory store.
    */
   public clearTuples(): void {
+    return this.mutate(() => this.clearTuplesNow());
+  }
+
+  /** @see {@link ZanzoEngine.clearTuples} */
+  private clearTuplesNow(): void {
     this.store.clear();
     this.nextExpiry = Number.POSITIVE_INFINITY;
     this.cache?.invalidate();
@@ -661,6 +752,11 @@ export class ZanzoEngine<TSchema extends SchemaData> {
    * cleanup() will always return 0.
    */
   public cleanup(): number {
+    return this.mutate(() => this.cleanupNow());
+  }
+
+  /** @see {@link ZanzoEngine.cleanup} */
+  private cleanupNow(): number {
     const now = Date.now();
     const expired: number[] = [];
     for (const [edge, expiresAt] of this.store.expiry) {
@@ -1035,18 +1131,7 @@ export class ZanzoEngine<TSchema extends SchemaData> {
    */
   public read(filter: TupleFilter = {}): Tuple[] {
     const store = this.store;
-    const toTuple = (e: number): Tuple => {
-      const tuple: Tuple = {
-        subject: store.entities.values[store.edgeSubject[e]!]!,
-        relation: store.names.values[store.edgeRelation[e]!]!,
-        object: store.entities.values[store.edgeObject[e]!]!,
-      };
-      const expiresAt = store.expiry.get(e);
-      if (expiresAt !== undefined) tuple.expiresAt = new Date(expiresAt);
-      const condition = store.conditions.get(e);
-      if (condition !== undefined) tuple.condition = condition;
-      return tuple;
-    };
+    const toTuple = (e: number): Tuple => this.tupleAt(e);
 
     const relation = filter.relation === undefined ? undefined : store.names.get(filter.relation);
     if (filter.relation !== undefined && relation === undefined) return [];
@@ -1077,6 +1162,244 @@ export class ZanzoEngine<TSchema extends SchemaData> {
       if (matches(e)) tuples.push(toTuple(e));
     });
     return tuples;
+  }
+
+  // ─── Writes and Watch ─────────────────────────────────────────────
+
+  /**
+   * Runs a public mutation so that it produces exactly one revision, and records its
+   * effective changes when Watch is enabled. Nested calls join the outermost one.
+   */
+  private mutate<T>(fn: () => T): T {
+    if (this.mutationDepth > 0) return fn();
+
+    const store = this.store;
+    const start = store.revision;
+    const pending = this.watchLog ? new Map<string, TupleChange>() : null;
+    let cleared = false;
+    if (pending) {
+      store.onChange = (kind, edge) => {
+        if (kind === 'clear') {
+          pending.clear();
+          cleared = true;
+          return;
+        }
+        const tuple = this.tupleAt(edge);
+        // The last change of a tuple within the operation wins; touches are re-read at the end
+        pending.set(`${tuple.subject}|${tuple.relation}|${tuple.object}`, kind === 'delete' ? { revision: 0, operation: 'delete', tuple } : { revision: 0, operation: 'touch', tuple: { ...tuple, edge } as Tuple & { edge: number } });
+      };
+    }
+
+    this.mutationDepth++;
+    try {
+      return fn();
+    } finally {
+      this.mutationDepth--;
+      store.onChange = undefined;
+      if (store.revision !== start) {
+        store.revision = start + 1;
+        if (pending) this.publish(store.revision, cleared, [...pending.values()]);
+      }
+    }
+  }
+
+  private publish(revision: number, cleared: boolean, changes: TupleChange[]): void {
+    const log = this.watchLog!;
+    const published: TupleChange[] = [];
+    if (cleared) published.push({ revision, operation: 'clear' });
+    for (const change of changes) {
+      if (change.operation === 'touch') {
+        const { edge } = change.tuple as Tuple & { edge: number };
+        published.push({ revision, operation: 'touch', tuple: this.tupleAt(edge) });
+      } else {
+        published.push({ ...change, revision });
+      }
+    }
+    log.push(...published);
+
+    // Drop the oldest revisions whole, so a reader never sees half of an operation
+    if (log.length > this.watchRetention) {
+      let drop = log.length - this.watchRetention;
+      const lastDropped = log[drop - 1]!.revision;
+      while (drop < log.length && log[drop]!.revision === lastDropped) drop++;
+      log.splice(0, drop);
+      this.watchTruncatedAt = lastDropped;
+    }
+
+    for (const listener of this.watchListeners) {
+      for (const change of published) listener(change);
+    }
+  }
+
+  /** A stored edge as a tuple, with its expiration and condition. */
+  private tupleAt(e: number): Tuple {
+    const store = this.store;
+    const tuple: Tuple = {
+      subject: store.entities.values[store.edgeSubject[e]!]!,
+      relation: store.names.values[store.edgeRelation[e]!]!,
+      object: store.entities.values[store.edgeObject[e]!]!,
+    };
+    const expiresAt = store.expiry.get(e);
+    if (expiresAt !== undefined) tuple.expiresAt = new Date(expiresAt);
+    const condition = store.conditions.get(e);
+    if (condition !== undefined) tuple.condition = condition;
+    return tuple;
+  }
+
+  /**
+   * Starts recording tuple changes for `watch()` and `onChange()`. Changes made before this
+   * call are not available. Recording has a cost on every write, so it is off by default.
+   */
+  public enableWatch(options: WatchOptions = {}): void {
+    this.watchRetention = Math.max(1, options.retention ?? 10_000);
+    this.watchLog = [];
+    this.watchTruncatedAt = this.store.revision;
+  }
+
+  /** Stops recording changes and drops the log. */
+  public disableWatch(): void {
+    this.watchLog = null;
+    this.watchListeners.clear();
+  }
+
+  /**
+   * Watch: the tuple changes made after `afterRevision`, oldest first. Store the last
+   * revision you processed and pass it on the next call.
+   *
+   * @throws {ZanzoError} WATCH_EXPIRED when changes after `afterRevision` are no longer
+   *   retained (resynchronize with `read()`), or when Watch is not enabled.
+   *
+   * @example
+   * engine.enableWatch();
+   * let cursor = engine.revision;
+   * // ... later
+   * for (const change of engine.watch(cursor)) invalidateSnapshotsFor(change.tuple);
+   * cursor = engine.revision;
+   */
+  public watch(afterRevision: number): TupleChange[] {
+    if (!this.watchLog) {
+      throw new ZanzoError(ZanzoErrorCode.WATCH_EXPIRED, '[Zanzo] Watch is not enabled. Call engine.enableWatch() first.');
+    }
+    if (afterRevision < this.watchTruncatedAt) {
+      throw new ZanzoError(
+        ZanzoErrorCode.WATCH_EXPIRED,
+        `[Zanzo] Changes after revision ${afterRevision} are no longer retained (oldest available: after ${this.watchTruncatedAt}). Resynchronize with engine.read().`,
+      );
+    }
+    return this.watchLog.filter((change) => change.revision > afterRevision);
+  }
+
+  /**
+   * Calls `listener` synchronously for every change after each mutation. Enables Watch with
+   * default options if needed. Returns a function that removes the listener.
+   */
+  public onChange(listener: (change: TupleChange) => void): () => void {
+    if (!this.watchLog) this.enableWatch();
+    this.watchListeners.add(listener);
+    return () => {
+      this.watchListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Applies several tuple updates atomically: either every update is applied, as a single
+   * new revision, or none is. Preconditions are checked against the stored tuples first.
+   *
+   * @throws {ZanzoError} PRECONDITION_FAILED, TUPLE_ALREADY_EXISTS (a `create` of an existing
+   *   tuple) or INVALID_WRITE (an invalid tuple or the same tuple twice); nothing is applied.
+   *
+   * @example
+   * engine.write({
+   *   preconditions: [{ operation: 'must_match', filter: { object: 'Workspace:eng', relation: 'admin', subject: 'User:alice' } }],
+   *   updates: [
+   *     { operation: 'create', tuple: { object: 'Document:1', relation: 'workspace', subject: 'Workspace:eng' } },
+   *     { operation: 'touch', tuple: { object: 'Document:1', relation: 'owner', subject: 'User:alice' } },
+   *   ],
+   * });
+   */
+  public write(request: WriteRequest): WriteResult {
+    const now = Date.now();
+    const seen = new Set<string>();
+    for (const { operation, tuple } of request.updates) {
+      if (operation !== 'create' && operation !== 'touch' && operation !== 'delete') {
+        throw new ZanzoError(ZanzoErrorCode.INVALID_WRITE, `[Zanzo] Unknown write operation "${String(operation)}".`);
+      }
+      if (!tuple || typeof tuple !== 'object') {
+        throw new ZanzoError(ZanzoErrorCode.INVALID_WRITE, '[Zanzo] Every update needs a tuple.');
+      }
+      const key = `${tuple.subject}|${tuple.relation}|${tuple.object}`;
+      if (seen.has(key)) {
+        throw new ZanzoError(ZanzoErrorCode.INVALID_WRITE, `[Zanzo] The tuple ${tuple.object}#${tuple.relation}@${tuple.subject} appears more than once in the same write.`);
+      }
+      seen.add(key);
+      // Validate everything before applying anything
+      if (operation !== 'delete') this.validateTuple(tuple);
+    }
+
+    this.checkPreconditions(request.preconditions, now);
+
+    for (const { operation, tuple } of request.updates) {
+      if (operation === 'create' && this.isLiveTuple(tuple, now)) {
+        throw new ZanzoError(
+          ZanzoErrorCode.TUPLE_ALREADY_EXISTS,
+          `[Zanzo] The tuple ${tuple.object}#${tuple.relation}@${tuple.subject} already exists.`,
+        );
+      }
+    }
+
+    const bulk = request.updates.length > 50;
+    this.mutate(() => {
+      for (const { operation, tuple } of request.updates) {
+        if (operation === 'delete') this.removeTupleNow(tuple, bulk);
+        else this.addTupleNow(tuple, bulk);
+      }
+    });
+    if (bulk) this.cache?.invalidate();
+    return { revision: this.store.revision };
+  }
+
+  /**
+   * Deletes every tuple matching the filter (for example all tuples of a deleted document),
+   * atomically and as a single revision. The filter must name at least one field; use
+   * `clearTuples()` to remove everything.
+   *
+   * @returns The number of deleted tuples and the resulting revision.
+   */
+  public deleteTuples(filter: TupleFilter, options: { preconditions?: WritePrecondition[] } = {}): { deleted: number; revision: number } {
+    if (filter.object === undefined && filter.relation === undefined && filter.subject === undefined) {
+      throw new ZanzoError(ZanzoErrorCode.INVALID_WRITE, '[Zanzo] deleteTuples() needs a filter with object, relation or subject. Use clearTuples() to remove every tuple.');
+    }
+    this.checkPreconditions(options.preconditions, Date.now());
+
+    const tuples = this.read(filter);
+    const bulk = tuples.length > 50;
+    this.mutate(() => {
+      for (const tuple of tuples) this.removeTupleNow(tuple, bulk);
+    });
+    if (bulk) this.cache?.invalidate();
+    return { deleted: tuples.length, revision: this.store.revision };
+  }
+
+  private checkPreconditions(preconditions: WritePrecondition[] | undefined, now: number): void {
+    for (const precondition of preconditions ?? []) {
+      const matches = this.read(precondition.filter).some((t) => !t.expiresAt || t.expiresAt.getTime() > now);
+      const required = precondition.operation === 'must_match';
+      if (precondition.operation !== 'must_match' && precondition.operation !== 'must_not_match') {
+        throw new ZanzoError(ZanzoErrorCode.INVALID_WRITE, `[Zanzo] Unknown precondition "${String(precondition.operation)}".`);
+      }
+      if (matches !== required) {
+        throw new ZanzoError(
+          ZanzoErrorCode.PRECONDITION_FAILED,
+          `[Zanzo] Precondition failed: expected ${required ? 'a' : 'no'} tuple matching ${JSON.stringify(precondition.filter)}.`,
+        );
+      }
+    }
+  }
+
+  /** Whether the tuple is stored and not expired. */
+  private isLiveTuple(tuple: Tuple, now: number): boolean {
+    const edge = this.findEdge(tuple);
+    return edge !== NONE && !this.isExpired(edge, now);
   }
 
   /** Plan of a resource's type; field-level resources (`Review:1#strengths`) use their entity type. */

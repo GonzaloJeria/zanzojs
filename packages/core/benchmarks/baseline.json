@@ -1,7 +1,7 @@
 {
   "memory: bytes per tuple (100k tuples)": 57.88,
-  "bundle: dist/index.js minified + gzip": 11045,
-  "load: µs per tuple": 0.6302,
+  "bundle: dist/index.js minified + gzip": 13254,
+  "load: \u00b5s per tuple": 0.6302,
   "check: direct relation": 0.6164,
   "check: nested workspace.org.admin": 0.5842,
   "check: 5 routes, denied": 0.9037,

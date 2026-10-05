@@ -346,6 +346,50 @@ with a request context or contextual tuples bypass the cache. Conditions should 
 functions of their context; checks without context may be cached. Tuples loaded with
 `engine.load()` keep their `condition` (`{ name, context }`), and `engine.read()` returns it.
 
+### Atomic writes, bulk deletes and Watch
+
+`engine.write()` applies several updates atomically, as a single revision. Preconditions
+are checked against the stored tuples first; if any check fails, nothing is applied.
+
+```typescript
+engine.write({
+  preconditions: [
+    { operation: 'must_match', filter: { object: 'Workspace:eng', relation: 'admin', subject: 'User:alice' } },
+  ],
+  updates: [
+    { operation: 'create', tuple: { object: 'Document:1', relation: 'workspace', subject: 'Workspace:eng' } }, // fails if it exists
+    { operation: 'touch', tuple: { object: 'Document:1', relation: 'owner', subject: 'User:alice' } },        // upsert
+    { operation: 'delete', tuple: { object: 'Document:0', relation: 'owner', subject: 'User:alice' } },
+  ],
+});
+// Throws ZANZO_PRECONDITION_FAILED, ZANZO_TUPLE_ALREADY_EXISTS or ZANZO_INVALID_WRITE without changes
+
+engine.deleteTuples({ object: 'Document:1' }); // every tuple of a deleted document → { deleted, revision }
+```
+
+Every public mutation (`grant`, `revoke`, `load`, `write`, `deleteTuples`, `cleanup`, …)
+advances `engine.revision` by exactly one when it changes something.
+
+Watch records the changes so caches and snapshots can be invalidated precisely. It is off
+by default because recording has a cost on every write.
+
+```typescript
+engine.enableWatch({ retention: 10_000 });
+let cursor = engine.revision;
+
+// Pull: changes after a revision (throws ZANZO_WATCH_EXPIRED if no longer retained)
+for (const change of engine.watch(cursor)) {
+  // { revision, operation: 'touch' | 'delete' | 'clear', tuple }
+}
+cursor = engine.revision;
+
+// Push: called synchronously after each mutation
+const stop = engine.onChange((change) => invalidateSnapshotsFor(change));
+```
+
+Contextual tuples never appear in Watch. Tuples that simply expire are not reported as
+changes until `cleanup()` removes them.
+
 ### `engine.grant(relation).to(subject).on(object)`
 Adds a tuple to the engine's in-memory index.
 

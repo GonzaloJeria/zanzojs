@@ -108,6 +108,12 @@ export class MemoryTupleStore {
   /** Incremented on every mutation */
   revision = 0;
 
+  /**
+   * Optional observer of effective changes, called before a removed edge is released.
+   * Set by the engine only while it records changes for Watch.
+   */
+  onChange: ((kind: 'touch' | 'delete' | 'clear', edge: number) => void) | undefined = undefined;
+
   get size(): number {
     return this.liveEdges;
   }
@@ -222,11 +228,13 @@ export class MemoryTupleStore {
 
     this.liveEdges++;
     this.revision++;
+    this.onChange?.('touch', e);
     return { edge: e, created: true };
   }
 
   /** Removes an edge by index. */
   removeEdge(e: number): void {
+    this.onChange?.('delete', e);
     const object = this.edgeObject[e]!;
     const subject = this.edgeSubject[e]!;
 
@@ -272,11 +280,14 @@ export class MemoryTupleStore {
   /** Sets or clears the expiration (epoch ms) of an edge. */
   setExpiry(e: number, expiresAt: number | undefined): void {
     if (expiresAt === undefined) {
-      if (this.expiry.delete(e)) this.revision++;
+      if (!this.expiry.delete(e)) return;
     } else if (this.expiry.get(e) !== expiresAt) {
       this.expiry.set(e, expiresAt);
-      this.revision++;
+    } else {
+      return;
     }
+    this.revision++;
+    this.onChange?.('touch', e);
   }
 
   /**
@@ -304,14 +315,15 @@ export class MemoryTupleStore {
   setCondition(e: number, condition: { name: string; context?: Record<string, unknown> } | undefined): void {
     const current = this.conditions.get(e);
     if (condition === undefined) {
-      if (current !== undefined) {
-        this.conditions.delete(e);
-        this.revision++;
-      }
+      if (current === undefined) return;
+      this.conditions.delete(e);
     } else if (current?.name !== condition.name || current.context !== condition.context) {
       this.conditions.set(e, condition);
-      this.revision++;
+    } else {
+      return;
     }
+    this.revision++;
+    this.onChange?.('touch', e);
   }
 
   /** Calls `fn` for every live edge. */
@@ -345,6 +357,7 @@ export class MemoryTupleStore {
     this.conditions.clear();
     this.large.clear();
     this.revision++;
+    this.onChange?.('clear', NONE);
   }
 
   private buildLarge(object: number): void {
