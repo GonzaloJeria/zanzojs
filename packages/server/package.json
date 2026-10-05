@@ -1,0 +1,57 @@
+{
+  "name": "@zanzojs/server",
+  "version": "0.0.0",
+  "description": "Framework-agnostic server helpers for Zanzo ReBAC on Web Request/Response: per-request authorization with batched checks, 401/403 errors and snapshot/check endpoints.",
+  "keywords": [
+    "@zanzojs/core",
+    "rebac",
+    "authorization",
+    "zanzibar",
+    "middleware",
+    "fetch",
+    "request"
+  ],
+  "homepage": "https://github.com/GonzaloJeria/zanzo",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/GonzaloJeria/zanzo.git",
+    "directory": "packages/server"
+  },
+  "license": "MIT",
+  "author": "Gonzalo Jeria",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@zanzojs/core": "workspace:^"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.35",
+    "@zanzojs/core": "workspace:*",
+    "tsup": "latest",
+    "tsx": "^4.19.3",
+    "typescript": "catalog:",
+    "vitest": "latest"
+  }
+}

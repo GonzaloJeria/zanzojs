@@ -1,0 +1,63 @@
+{
+  "name": "@zanzojs/hono",
+  "version": "0.0.0",
+  "description": "Hono middleware for Zanzo ReBAC: per-request authorization, requirePermission guards and snapshot/check endpoints. Runs on Cloudflare Workers, Bun, Deno and Node.",
+  "keywords": [
+    "@zanzojs/core",
+    "rebac",
+    "authorization",
+    "zanzibar",
+    "hono",
+    "middleware",
+    "cloudflare-workers"
+  ],
+  "homepage": "https://github.com/GonzaloJeria/zanzo",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/GonzaloJeria/zanzo.git",
+    "directory": "packages/hono"
+  },
+  "license": "MIT",
+  "author": "Gonzalo Jeria",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@zanzojs/core": "workspace:^",
+    "hono": ">=4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.35",
+    "@zanzojs/core": "workspace:*",
+    "tsup": "latest",
+    "tsx": "^4.19.3",
+    "typescript": "catalog:",
+    "vitest": "latest",
+    "hono": "^4.13.0",
+    "@zanzojs/sql": "workspace:*"
+  },
+  "dependencies": {
+    "@zanzojs/server": "workspace:^"
+  }
+}

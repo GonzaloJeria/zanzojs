@@ -34,7 +34,7 @@ import { ZanzoBuilder } from '@zanzojs/core';
 import { createZanzoSql, d1Driver } from '@zanzojs/sql';
 
 export const schema = new ZanzoBuilder()
-  .entity('User', { relations: {} })
+  .entity('User', { actions: [], relations: {} })
   .entity('Org', { relations: { admin: 'User', member: 'User' }, permissions: { view: 'member | admin' } })
   .entity('Doc', {
     relations: { org: 'Org', viewer: ['User', 'User:*'], banned: 'User' },

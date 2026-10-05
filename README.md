@@ -22,6 +22,7 @@ The Zanzo ecosystem is split into modular packages so you only bundle exactly wh
 
 - **[`@zanzojs/core`](./packages/core)**: The zero-dependency core engine. 100% isomorphic and Edge-compatible.
 - **[`@zanzojs/sql`](./packages/sql)**: SQL storage without an ORM or materialization: checks, lookups, atomic writes and Watch on SQLite, **Cloudflare D1**, libSQL and Postgres. Recommended for new projects.
+- **[`@zanzojs/hono`](./packages/hono)**: Hono middleware: `c.var.zanzo`, `requirePermission` guards and snapshot/check endpoints. Built on the framework-agnostic **[`@zanzojs/server`](./packages/server)**.
 - **[`@zanzojs/drizzle`](./packages/drizzle)**: Legacy Drizzle ORM adapter based on materialized tuples. Superseded by `@zanzojs/sql`.
 - **[`@zanzojs/react`](./packages/react)**: React contextual bindings. Enables synchronous, zero-latency permission checks.
 - **[`@zanzojs/cli`](./packages/cli)**: Official CLI with schema validation and AST complexity linting.
