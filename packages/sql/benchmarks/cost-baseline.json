@@ -1,0 +1,18 @@
+{
+  "flows answered correctly (of 4)": 4,
+  "grant org admin: rows written": 2,
+  "grant org admin: round trips": 1,
+  "grant workspace admin: rows written": 2,
+  "create document: rows written": 2,
+  "check one document: rows read": 3,
+  "check one document: round trips": 3,
+  "list documents (workspace admin, 250): rows read": 251,
+  "list documents (workspace admin, 250): round trips": 2,
+  "list documents (org admin, 5k): rows read": 5022,
+  "list documents (org admin, 5k): round trips": 3,
+  "snapshot org admin: rows read": 5022,
+  "check one document": 0.1334,
+  "list readable documents (org admin, 5k)": 27.94,
+  "list readable documents (workspace admin, 250)": 1.465,
+  "snapshot org admin (load + compile)": 27.89
+}

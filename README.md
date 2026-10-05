@@ -21,7 +21,8 @@ Writing raw SQL `JOIN`s for this is painfully slow and hard to maintain. Zanzo s
 The Zanzo ecosystem is split into modular packages so you only bundle exactly what you need:
 
 - **[`@zanzojs/core`](./packages/core)**: The zero-dependency core engine. 100% isomorphic and Edge-compatible.
-- **[`@zanzojs/drizzle`](./packages/drizzle)**: The official Drizzle ORM adapter. Supports PostgreSQL, MySQL, and **Cloudflare D1**.
+- **[`@zanzojs/sql`](./packages/sql)**: SQL storage without an ORM or materialization: checks, lookups, atomic writes and Watch on SQLite, **Cloudflare D1**, libSQL and Postgres. Recommended for new projects.
+- **[`@zanzojs/drizzle`](./packages/drizzle)**: Legacy Drizzle ORM adapter based on materialized tuples. Superseded by `@zanzojs/sql`.
 - **[`@zanzojs/react`](./packages/react)**: React contextual bindings. Enables synchronous, zero-latency permission checks.
 - **[`@zanzojs/cli`](./packages/cli)**: Official CLI with schema validation and AST complexity linting.
 

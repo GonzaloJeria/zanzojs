@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import * as core from '../src/index';
 import * as materialize from '../src/materialize';
+import * as schemaEntry from '../src/schema';
 
 /**
  * Freezes the public surface. A change here is a change to the published API: update the
@@ -42,6 +43,10 @@ describe('public API', () => {
       'removeDerivedTuples',
       'uniqueTupleKey',
     ]);
+  });
+
+  it('@zanzojs/core/schema exports exactly these runtime values', () => {
+    expect(Object.keys(schemaEntry).sort()).toEqual(['compileSchema', 'parseAllowedSubject']);
   });
 
   it('ZanzoEngine exposes these public members', () => {

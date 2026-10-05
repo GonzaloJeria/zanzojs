@@ -1,0 +1,60 @@
+{
+  "name": "@zanzojs/sql",
+  "version": "0.0.0",
+  "description": "SQL storage for Zanzo ReBAC: Zanzibar checks, lookups, atomic writes and Watch on SQLite, Cloudflare D1, libSQL and Postgres. No ORM, no materialization.",
+  "keywords": [
+    "@zanzojs/core",
+    "rebac",
+    "authorization",
+    "zanzibar",
+    "sql",
+    "sqlite",
+    "d1",
+    "postgres"
+  ],
+  "homepage": "https://github.com/GonzaloJeria/zanzo",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/GonzaloJeria/zanzo.git",
+    "directory": "packages/sql"
+  },
+  "license": "MIT",
+  "author": "Gonzalo Jeria",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "cost": "node --import tsx benchmarks/cost-gate.ts"
+  },
+  "peerDependencies": {
+    "@zanzojs/core": "workspace:^"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.3.0",
+    "@types/node": "^20.19.35",
+    "@zanzojs/core": "workspace:*",
+    "tsup": "latest",
+    "tsx": "^4.19.3",
+    "typescript": "catalog:",
+    "vitest": "latest"
+  }
+}

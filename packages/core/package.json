@@ -30,6 +30,11 @@
       "types": "./dist/materialize.d.ts",
       "import": "./dist/materialize.js",
       "require": "./dist/materialize.cjs"
+    },
+    "./schema": {
+      "types": "./dist/schema.d.ts",
+      "import": "./dist/schema.js",
+      "require": "./dist/schema.cjs"
     }
   },
   "main": "./dist/index.cjs",

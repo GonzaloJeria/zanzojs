@@ -62,5 +62,8 @@ jobs:
       - name: Core performance gate (memory, bundle, throughput)
         run: pnpm --filter @zanzojs/core perf
 
-      - name: SQL cost gate (rows written, round trips, latency)
+      - name: SQL cost gate (rows written and read, round trips, latency)
+        run: pnpm --filter @zanzojs/sql cost
+
+      - name: Legacy Drizzle cost gate (for comparison)
         run: pnpm --filter @zanzojs/drizzle cost
