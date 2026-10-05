@@ -119,11 +119,14 @@ export interface DeferredExpansion {
  *
  * @returns Array of derived RelationTuples to insert alongside the base tuple.
  * Returns `[]` if there are no derivations.
+ *
+ * @deprecated Materialization will be removed in v1.0.0. Use `@zanzojs/sql`.
  */
 export async function materializeDerivedTuples(
   ctx: ExpansionContext & { mode: 'deferred' }
 ): Promise<DeferredExpansion>;
 
+/** @deprecated Materialization will be removed in v1.0.0. Use `@zanzojs/sql`. */
 export async function materializeDerivedTuples(
   ctx: ExpansionContext & { mode?: 'eager' }
 ): Promise<RelationTuple[]>;
@@ -209,6 +212,8 @@ export async function materializeDerivedTuples(
  * const key = uniqueTupleKey({ subject: 'User:1', relation: 'admin', object: 'Org:A' });
  * // → 'User:1|admin|Org:A'
  * ```
+ *
+ * @deprecated Materialization will be removed in v1.0.0. Use `@zanzojs/sql`.
  */
 export function uniqueTupleKey(tuple: RelationTuple): string {
   return `${tuple.subject}|${tuple.relation}|${tuple.object}`;
@@ -225,6 +230,8 @@ export function uniqueTupleKey(tuple: RelationTuple): string {
  * const unique = deduplicateTuples([baseTuple, ...derived]);
  * await tx.insert(zanzoTuples).values(unique);
  * ```
+ *
+ * @deprecated Materialization will be removed in v1.0.0. Use `@zanzojs/sql`.
  */
 export function deduplicateTuples(tuples: RelationTuple[]): RelationTuple[] {
   const seen = new Set<string>();
@@ -266,6 +273,8 @@ export function deduplicateTuples(tuples: RelationTuple[]): RelationTuple[] {
  *   }
  * });
  * ```
+ *
+ * @deprecated Materialization will be removed in v1.0.0. Use `@zanzojs/sql`.
  */
 export function buildBulkDeleteCondition(
   tuples: RelationTuple[]

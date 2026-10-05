@@ -38,7 +38,8 @@
     "@clack/prompts": "^0.7.0",
     "jiti": "^2.6.1",
     "picocolors": "^1.0.0",
-    "postgres": "^3.4.8"
+    "postgres": "^3.4.8",
+    "@zanzojs/sql": "workspace:^"
   },
   "peerDependencies": {
     "@zanzojs/core": "^0.3.0"

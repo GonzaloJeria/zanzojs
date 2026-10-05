@@ -70,6 +70,8 @@ export interface CollapseContext {
  *
  * @returns Array of RelationTuples that must be deleted.
  * Does NOT include the `revokedTuple` itself (the caller deletes it separately).
+ *
+ * @deprecated Materialization will be removed in v1.0.0. Use `@zanzojs/sql`.
  */
 export async function removeDerivedTuples(ctx: CollapseContext): Promise<RelationTuple[]> {
   const { schema, revokedTuple, fetchChildren, maxCollapseSize = 500 } = ctx;

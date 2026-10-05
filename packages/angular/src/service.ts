@@ -60,6 +60,9 @@ export class ZanzoService<
    * Hydrates the service with a pre-filtered permission snapshot and optionally
    * frontend extensions (capabilities).
    *
+   * The `extensions` argument is deprecated and will be removed in v1.0.0, together with
+   * `ZanzoExtension`; model capabilities as relations in the schema instead.
+   *
    * @remarks
    * **Security (v0.1.0 fix):** This method now uses `ZanzoClient` directly for O(1)
    * permission lookups instead of reconstructing a `ZanzoEngine` with a permissive

@@ -10,7 +10,6 @@ import { createZanzoAdapter } from '../src/index.js';
 import * as sqliteSchema from '../src/schema/sqlite.js';
 import * as pgSchema from '../src/schema/pg.js';
 import * as mysqlSchema from '../src/schema/mysql.js';
-import { migrationTemplate } from '../../cli/src/templates/migration.js';
 
 const readMigration = (name: string) =>
   readFileSync(fileURLToPath(new URL(`../migrations/${name}.sql`, import.meta.url)), 'utf8');
@@ -60,11 +59,6 @@ describe('Canonical tuple table definitions', () => {
     expect(getSqliteConfig(sqliteSchema.createZanzoTuplesTable('acl')).name).toBe('acl');
   });
 
-  it('CLI migrations generate exactly the shipped statements', () => {
-    expect(statements(migrationTemplate('sqlite'))).toEqual(statements(readMigration('sqlite')));
-    expect(statements(migrationTemplate('postgresql'))).toEqual(statements(readMigration('postgres')));
-    expect(statements(migrationTemplate('mysql'))).toEqual(statements(readMigration('mysql')));
-  });
 });
 
 describe('expiresAt enforcement end-to-end (SQLite)', () => {

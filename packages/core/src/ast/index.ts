@@ -1,4 +1,7 @@
 /**
+ * @deprecated Part of `buildDatabaseQuery`, used only by the legacy `@zanzojs/drizzle` adapter.
+ * Will be removed in v1.0.0.
+ *
  * Represents a logical combination of multiple conditions in the AST.
  */
 export interface QueryAST {

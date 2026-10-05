@@ -64,6 +64,3 @@ jobs:
 
       - name: SQL cost gate (rows written and read, round trips, latency)
         run: pnpm --filter @zanzojs/sql cost
-
-      - name: Legacy Drizzle cost gate (for comparison)
-        run: pnpm --filter @zanzojs/drizzle cost

@@ -576,6 +576,9 @@ export class ZanzoEngine<TSchema extends SchemaData> {
    *
    * @param extensions ZanzoExtension instance containing capabilities per entity.
    * @param relation The base relation mapping the entity instance to the capability object (e.g. 'module')
+   *
+   * @deprecated Extensions are deprecated and will be removed in v1.0.0. Model capabilities as
+   * relations in the schema instead.
    */
   public loadExtensions(extensions: ZanzoExtension<any>, relation: string = 'module'): void {
     const extensionTuples = extensions.toTuples(relation) as RelationTuple[];
@@ -1562,6 +1565,9 @@ export class ZanzoEngine<TSchema extends SchemaData> {
    * @param action The specific action to perform (e.g., 'read'), strictly typed.
    * @param resourceType The target resource entity TYPE (e.g., 'Project')
    * @returns QueryAST block if action is valid and has mapped relations, null otherwise.
+   *
+   * @deprecated Used only by the legacy `@zanzojs/drizzle` adapter; will be removed in v1.0.0.
+   * Use `lookupResources` (or `@zanzojs/sql`) and filter with `WHERE id IN (…)` instead.
    */
   public buildDatabaseQuery<
     TResourceName extends Extract<ExtractSchemaResources<TSchema>, string>,

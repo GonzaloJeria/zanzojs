@@ -4,12 +4,18 @@ import { ZanzoError, ZanzoErrorCode } from '../errors';
  * A Map representing instances to capabilities.
  * Key: entity instance (e.g. 'Module:ventas')
  * Value: array of capabilities (e.g. ['export_csv', 'import_data'])
+ *
+ * @deprecated Extensions (capabilities) are deprecated and will be removed in v1.0.0. Model
+ * capabilities as relations in the schema instead, e.g. `Module.relations.export_csv: 'User'`.
  */
 export type CapabilityMap = Map<string, string[]>;
 
 /**
  * Equivalent internally to a RelationTuple but typed differently for clarity.
  * These are the tuples generated to synchronize capabilities.
+ *
+ * @deprecated Extensions (capabilities) are deprecated and will be removed in v1.0.0. Model
+ * capabilities as relations in the schema instead, e.g. `Module.relations.export_csv: 'User'`.
  */
 export interface ExtensionTuple {
   subject: string;
@@ -21,6 +27,9 @@ export interface ExtensionTuple {
 /**
  * Given an extensions definition, infers the capabilities actions.
  * Extracts the Action type from the internal mapping or tuple output.
+ *
+ * @deprecated Extensions (capabilities) are deprecated and will be removed in v1.0.0. Model
+ * capabilities as relations in the schema instead, e.g. `Module.relations.export_csv: 'User'`.
  */
 export type ExtractCapabilityActions<TExtensions> = TExtensions extends ZanzoExtension<infer TCaps>
   ? TCaps
@@ -31,6 +40,9 @@ export type ExtractCapabilityActions<TExtensions> = TExtensions extends ZanzoExt
  * Stores mappings that are useful for UI visibility and sync to the backend.
  * 
  * Capabilities are normally stored under a "Capability" resource namespace for uniqueness.
+ *
+ * @deprecated Extensions (capabilities) are deprecated and will be removed in v1.0.0. Model
+ * capabilities as relations in the schema instead, e.g. `Module.relations.export_csv: 'User'`.
  */
 export class ZanzoExtension<TCaps extends string = never> {
   private readonly map: CapabilityMap;

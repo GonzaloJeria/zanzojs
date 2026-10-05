@@ -1,5 +1,14 @@
 # @zanzojs/drizzle
 
+> [!WARNING]
+> **Deprecated.** This adapter materializes inherited permissions at write time: granting an org
+> admin writes one row per resource, and grants made before a resource is attached are never
+> inherited. It will not receive new features and will be removed in v1.0.0.
+>
+> Use [`@zanzojs/sql`](../sql) instead. It stores only base tuples, supports every schema feature
+> and works with Drizzle projects: pass the IDs from `lookupResources` to `inArray()`. See
+> [Upgrading from the @zanzojs/drizzle canonical table](../sql/README.md#upgrading-from-the-zanzojsdrizzle-canonical-table).
+
 [![npm version](https://img.shields.io/npm/v/@zanzojs/drizzle.svg?style=flat-square)](https://www.npmjs.com/package/@zanzojs/drizzle)
 [![Drizzle ORM](https://img.shields.io/badge/Drizzle-ORM-green.svg?style=flat-square)](https://orm.drizzle.team)
 

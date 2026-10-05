@@ -16,7 +16,6 @@
     "changeset": "changeset",
     "version-packages": "changeset version",
     "release": "changeset publish",
-    "dev:test": "pnpm --filter test-app dev",
     "cli": "node packages/cli/dist/index.js",
     "perf": "pnpm --filter @zanzojs/core perf && pnpm --filter @zanzojs/drizzle cost"
   },

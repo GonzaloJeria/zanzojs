@@ -10,12 +10,12 @@ import * as path from 'node:path';
 import { execSync } from 'node:child_process';
 import { generateSchema } from '../generators/schema';
 import { generateMigration } from '../generators/migration';
-import { generateRoutes } from '../generators/routes';
 import { generateAgentContext } from '../generators/agent-context';
 import { generateUI } from '../generators/ui';
-import type { FrameworkType } from '../templates/routes/permissions';
 import type { DatabaseType } from '../templates/migration';
 import type { AgentType } from '../generators/agent-context';
+
+export type FrameworkType = 'nextjs-app' | 'nextjs-pages' | 'express' | 'hono' | 'other';
 
 export async function initCommand(): Promise<void> {
   p.intro(pc.bgCyan(pc.black(' 🌌 Welcome to ZanzoJS ')));
@@ -105,25 +105,14 @@ export async function initCommand(): Promise<void> {
     }
   }
 
-  let _orm = 'none';
   let database = 'sqlite';
 
   if (topology !== 'frontend') {
-    _orm = await p.select({
-      message: 'Which ORM are you using?',
-      options: [
-        { value: 'drizzle', label: 'Drizzle' },
-        { value: 'none', label: 'None' },
-      ],
-    }) as string;
-    if (p.isCancel(_orm)) { p.cancel('Setup cancelled.'); process.exit(0); }
-
     database = await p.select<{ value: DatabaseType; label: string }[], DatabaseType>({
       message: 'Which database are you using?',
       options: [
         { value: 'postgresql', label: 'PostgreSQL' },
-        { value: 'sqlite', label: 'SQLite / Cloudflare D1' },
-        { value: 'mysql', label: 'MySQL' },
+        { value: 'sqlite', label: 'SQLite / Cloudflare D1 / Turso' },
       ],
     }) as string;
     if (p.isCancel(database)) { p.cancel('Setup cancelled.'); process.exit(0); }
@@ -196,10 +185,6 @@ export async function initCommand(): Promise<void> {
     s.message('Creating database migration...');
     await generateMigration(database as DatabaseType);
     await sleep(400);
-
-    s.message(`Generating ${framework} API routes...`);
-    await generateRoutes(framework as FrameworkType, _orm as string, outputDir as string);
-    await sleep(400);
   }
 
   s.message('Configuring AI agent context...');
@@ -224,8 +209,9 @@ export async function initCommand(): Promise<void> {
         pkg.dependencies['@zanzojs/react'] = '^0.3.0';
       }
       
-      if (_orm === 'drizzle') {
-        pkg.dependencies['@zanzojs/drizzle'] = '^0.3.2';
+      if (topology !== 'frontend') {
+        pkg.dependencies['@zanzojs/sql'] = '^0.1.0';
+        if (framework === 'hono') pkg.dependencies['@zanzojs/hono'] = '^0.1.0';
       }
       
       fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2), 'utf8');
@@ -251,7 +237,6 @@ export async function initCommand(): Promise<void> {
   s.stop(pc.green('Zanzo Boilerplate generated successfully! 🔥'));
 
   const migrationCommand = getMigrationCommand(database as DatabaseType);
-  const routePaths = getRoutePaths(framework as FrameworkType, outputDir as string);
 
   const steps = [
     `${pc.bold('Your environment is ready. Next steps:')}`,
@@ -267,18 +252,19 @@ export async function initCommand(): Promise<void> {
   steps.push('');
   
   if (topology !== 'frontend') {
-    steps.push(`  3. Connect your DB in the API routes:`);
-    steps.push(...routePaths.map((r) => `     ${pc.cyan(r)}`));
+    steps.push(`  3. Connect the tuple store to your database:`);
+    steps.push(`     ${pc.cyan("const zanzo = createZanzoSql({ schema, driver: d1Driver(env.DB) })")}`);
+    steps.push(`     ${pc.dim('See https://github.com/GonzaloJeria/zanzo/tree/main/packages/sql')}`);
     steps.push('');
     steps.push(`  4. Wrap your app with ZanzoProvider:`);
   } else {
     steps.push(`  2. Wrap your app with ZanzoProvider:`);
   }
   
-  steps.push(`     Fetch the snapshot server-side and pass it as an object:`);
+  steps.push(`     Build the snapshot server-side (or serve it with @zanzojs/hono) and pass it as an object:`);
   steps.push('');
   steps.push(`     ${pc.dim('// 1. Fetch snapshot')}`);
-  steps.push(`     const snapshot = await fetch('/api/permissions?userId=...').then(r => r.json());`);
+  steps.push("     const snapshot = await zanzo.snapshot(`User:${userId}`);");
   steps.push('');
   steps.push(`     ${pc.dim('// 2. Pass to provider')}`);
   steps.push(`     <ZanzoProvider snapshot={snapshot}>...<\/ZanzoProvider>`);
@@ -300,29 +286,6 @@ function getMigrationCommand(database: DatabaseType): string {
   switch (database) {
     case 'postgresql': return 'psql -d your_database -f zanzo-migration.sql';
     case 'sqlite': return 'sqlite3 your.db < zanzo-migration.sql';
-    case 'mysql': return 'mysql -u root -p your_database < zanzo-migration.sql';
   }
 }
 
-function getRoutePaths(framework: FrameworkType, outputDir: string): string[] {
-  switch (framework) {
-    case 'nextjs-app':
-      return [
-        `${outputDir}app/api/permissions/route.ts`,
-        `${outputDir}app/api/grant/route.ts`,
-        `${outputDir}app/api/revoke/route.ts`,
-      ];
-    case 'nextjs-pages':
-      return [
-        `${outputDir}pages/api/permissions.ts`,
-        `${outputDir}pages/api/grant.ts`,
-        `${outputDir}pages/api/revoke.ts`,
-      ];
-    default:
-      return [
-        `${outputDir}routes/permissions.ts`,
-        `${outputDir}routes/grant.ts`,
-        `${outputDir}routes/revoke.ts`,
-      ];
-  }
-}

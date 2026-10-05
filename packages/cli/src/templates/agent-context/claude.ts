@@ -4,58 +4,38 @@
  */
 
 export function agentContextContent(): string {
-  return `You are working on a project that uses ZanzoJS for ReBAC authorization.
+  return `You are working on a project that uses ZanzoJS for ReBAC (Zanzibar-style) authorization.
 
-ZANZOJS CRITICAL RULES:
+ZANZOJS RULES:
 
-1. FRESH ENGINE PER REQUEST
-   Always: const engine = new ZanzoEngine(schema)
-   Never reuse the engine across requests — it accumulates tuples from multiple users.
+1. SCHEMA
+   Define it once with ZanzoBuilder (zanzo.config.ts). Permissions are expressions:
+   'viewer | editor', 'org->admin' (admin of the related org), '(viewer | owner) - banned', 'a & b'.
 
-2. LOAD FROM DB WITH engine.load()
-   engine.load(rows) — hydrates from database (production)
-   engine.grant() — in-memory only, use in tests and seeds only
-   engine.addTuples() — deprecated, use engine.load() instead
+2. TUPLES
+   A tuple is { object, relation, subject }: "subject has relation on object".
+   { object: 'Doc:1', relation: 'org', subject: 'Org:acme' } links a document to its org.
+   { object: 'Org:acme', relation: 'admin', subject: 'User:1' } makes User:1 an org admin.
+   Usersets ('Group:eng#member') and wildcards ('User:*') are valid subjects when the schema allows them.
 
-3. TUPLE DIRECTION
-   Always: { subject: PARENT, relation: RELATION, object: CHILD }
-   Example: { subject: 'Organization:org1', relation: 'organization', object: 'Project:p1' }
-   Never reverse subject and object.
+3. STORAGE: @zanzojs/sql
+   const zanzo = createZanzoSql({ schema, driver: d1Driver(env.DB) }) // or sqliteDriver, libsqlDriver, pgDriver
+   Write ONLY the base tuple: zanzo.grant(tuple) / zanzo.revoke(tuple) / zanzo.write({ updates, preconditions }).
+   Never precompute or "materialize" inherited permissions: the engine derives them at check time.
 
-4. NESTED PATHS REQUIRE materializeDerivedTuples() from '@zanzojs/core/materialize'
-   If your schema has paths like 'organization.admin', you MUST call materializeDerivedTuples() from '@zanzojs/core/materialize'
-   when writing to the database. Without it, nested paths silently return false.
+4. CHECKS ON THE SERVER
+   await zanzo.check(actor, action, resource)
+   await zanzo.checkMany([...]) for several checks in the same round trips
+   await zanzo.lookupResources(actor, action, 'Doc') → ids, then filter your table with WHERE id IN (...)
+   With Hono: app.use(zanzo({ authorizer: store, getActor })), then requirePermission(action, c => resource)
+   or await c.var.zanzo.require(action, resource) inside handlers.
 
-5. ALWAYS LOAD STRUCTURAL TUPLES
-   When generating a snapshot, load both:
-   - User tuples: WHERE subject = 'User:userId'
-   - Structural tuples: WHERE relation = 'your_structural_relation'
-   Then: engine.load([...structuralTuples, ...userTuples])
+5. ENFORCE ON THE SERVER, DISPLAY ON THE CLIENT
+   Snapshots (zanzo.snapshot(actor), GET /zanzo/snapshot) feed @zanzojs/react / @zanzojs/angular to hide UI.
+   They are not a security boundary: every mutation must be checked on the server.
+   Never import @zanzojs/core or @zanzojs/sql in 'use client' files.
 
-6. fetchChildren PATTERN
-   fetchChildren: async (parentObject, relation) => {
-     const rows = await db.select({ object: zanzoTuples.object })
-       .from(zanzoTuples)
-       .where(and(
-         eq(zanzoTuples.subject, parentObject), // query by parent
-         eq(zanzoTuples.relation, relation),
-       ));
-     return rows.map(r => r.object); // return children
-   }
-
-7. CACHE INVALIDATION
-   After any grant or revoke: await redis.del(\`snapshot:\${subject}\`)
-
-8. CLIENT SEPARATION
-   Never import @zanzojs/core in 'use client' files.
-   Use @zanzojs/react (ZanzoProvider, useZanzo) on the client side only.
-
-9. COMPLEXITY
-   can() → O(1) — use freely anywhere
-   listAccessible() → O(n) — use for building lists, not in render loops
-
-10. @zanzojs/drizzle
-    withPermissions() → for SQL-filtered backend queries on large datasets
-    NOT for generating the frontend snapshot
+6. CONSISTENCY
+   Every write returns { revision }. Use zanzo.watch(revision) to invalidate caches or replicate tuples.
 `;
 }
